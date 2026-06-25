@@ -52,7 +52,7 @@ migrations, building a known-good baseline, disaster-recovery rebuilds, and conf
 ## Install
 
 ```bash
-git clone https://github.com/<your-username>/MDOMigrate.git
+git clone https://github.com/goodnessibeh/MDOMigrate.git
 cd MDOMigrate
 ```
 
