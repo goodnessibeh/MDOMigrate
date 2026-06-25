@@ -37,11 +37,17 @@
 .PARAMETER ConfigPath
     Path to the tenant config file. Defaults to tenants.json in the repository root.
 
+.PARAMETER CreateMissingGroups
+    What to do when a rule targets a distribution group (SentToMemberOf, ...) that does not exist in the
+    destination tenant: Ask (default, prompt to create an empty group per missing group), Always (create
+    without asking), or Never (skip - the missing group is dropped from the rule).
+
 .EXAMPLE
     ./scripts/Import-MDOConfig.ps1                          # dry run, latest export on Desktop
     ./scripts/Import-MDOConfig.ps1 -Execute                 # apply latest export
     ./scripts/Import-MDOConfig.ps1 -IncludeCategory Policy,Rule -Execute
     ./scripts/Import-MDOConfig.ps1 -IgnoreRecipientScope -Execute
+    ./scripts/Import-MDOConfig.ps1 -CreateMissingGroups Always -Execute   # auto-create missing groups
     ./scripts/Import-MDOConfig.ps1 -Path 'C:\backups\20260625-120000' -Execute   # explicit export folder
 #>
 [CmdletBinding()]
@@ -51,6 +57,7 @@ param(
     [string[]]$IncludeCategory,
     [string[]]$IncludeType,
     [switch]$IgnoreRecipientScope,
+    [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
     [string]$Domain,
     [string]$UserPrincipalName,
     [string]$ConfigPath
@@ -70,7 +77,7 @@ Connect-MDOTenant -UserPrincipalName $dest.UserPrincipalName -TenantDomain $dest
 # Final hard guard right before writing: never apply to the wrong tenant.
 if ($Execute) { Assert-MDOTenantDomain -Domain $dest.Domain }
 
-$importParams = @{ Path = $Path; Execute = $Execute; IgnoreRecipientScope = $IgnoreRecipientScope }
+$importParams = @{ Path = $Path; Execute = $Execute; IgnoreRecipientScope = $IgnoreRecipientScope; CreateMissingGroups = $CreateMissingGroups }
 if ($IncludeCategory) { $importParams['IncludeCategory'] = $IncludeCategory }
 if ($IncludeType)     { $importParams['IncludeType']     = $IncludeType }
 

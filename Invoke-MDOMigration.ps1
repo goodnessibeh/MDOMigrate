@@ -58,6 +58,10 @@
 .PARAMETER IncludeCategory / IncludeType / IgnoreRecipientScope
     Passed through to the import step (see Import-MDOConfig.ps1).
 
+.PARAMETER CreateMissingGroups
+    When a rule targets a distribution group absent in the destination: Ask (default, prompt per group),
+    Always (create empty groups without asking), or Never (drop the missing group from the rule).
+
 .PARAMETER Force
     Skip the "about to write to <destination>" confirmation prompt in -Live mode.
 
@@ -86,6 +90,7 @@ param(
     [string[]]$IncludeCategory,
     [string[]]$IncludeType,
     [switch]$IgnoreRecipientScope,
+    [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
     [switch]$Force,
     [string]$LogPath
 )
@@ -175,7 +180,7 @@ try {
     }
 
     Write-Host "`n      Importing into DESTINATION ($mode)..." -ForegroundColor Cyan
-    $importParams = @{ Path = $exportFolder; Execute = $execute; IgnoreRecipientScope = $IgnoreRecipientScope }
+    $importParams = @{ Path = $exportFolder; Execute = $execute; IgnoreRecipientScope = $IgnoreRecipientScope; CreateMissingGroups = $CreateMissingGroups }
     if ($IncludeCategory) { $importParams['IncludeCategory'] = $IncludeCategory }
     if ($IncludeType)     { $importParams['IncludeType']     = $IncludeType }
     $importResults = Import-MDOConfiguration @importParams

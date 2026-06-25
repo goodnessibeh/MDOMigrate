@@ -27,6 +27,25 @@ function Import-MDOPolicyObject {
     $name = Get-MDOProperty $Object 'Name'
     $isDefault = [bool](Get-MDOProperty $Object 'IsDefault' $false)
 
+    # Preset / Evaluation policies (Standard, Strict, Evaluation) are created by the preset-security and
+    # Defender-evaluation features and already exist in the target under a DIFFERENT auto-generated name.
+    # Trying to New- a second one fails ("Already there is a 'Standard' recommended policy"), so match the
+    # existing one by RecommendedPolicyType and update it in place (overwrite) instead.
+    $preset = Get-MDOProperty $Object 'RecommendedPolicyType'
+    if ($preset -in @('Standard', 'Strict', 'Evaluation')) {
+        $existingPreset = @(& "Get-$Type" -ErrorAction SilentlyContinue) |
+            Where-Object { (Get-MDOProperty $_ 'RecommendedPolicyType') -eq $preset } |
+            Select-Object -First 1
+        if ($existingPreset) {
+            $presetName = Get-MDOProperty $existingPreset 'Name'
+            $splat = ConvertTo-MDOSplat -InputObject $Object -TargetCmdlet "Set-$Type"
+            $splat['Identity'] = $presetName
+            return Invoke-MDOAction -Cmdlet "Set-$Type" -Parameters $splat -Description "update $preset preset '$presetName'" -Execute:$Execute
+        }
+        # No existing preset of this type in the target: fall through and create it (self-healing in
+        # Invoke-MDOAction drops any parameters the New- cmdlet rejects, e.g. IntraOrgFilterState).
+    }
+
     if ($isDefault -or $name -eq 'Default' -or (Test-MDOObject -Type $Type -Identity $name)) {
         $splat = ConvertTo-MDOSplat -InputObject $Object -TargetCmdlet "Set-$Type"
         $splat['Identity'] = $name
@@ -38,31 +57,184 @@ function Import-MDOPolicyObject {
     return Invoke-MDOAction -Cmdlet "New-$Type" -Parameters $splat -Description "create '$name'" -Execute:$Execute
 }
 
+# Group predicates on a rule that reference a mail-enabled group by identity.
+$Script:MDORuleGroupParam = @('SentToMemberOf', 'ExceptIfSentToMemberOf', 'FromMemberOf', 'ExceptIfFromMemberOf')
+
+function Test-MDOGroupPresent {
+    <# True if $Identity resolves to a mail-enabled group in the target tenant. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Identity)
+    try { if (Get-DistributionGroup -Identity $Identity -ErrorAction Stop) { return $true } } catch { $null = $_ }
+    try {
+        $r = Get-Recipient -Identity $Identity -ErrorAction Stop
+        if ($r -and ((Get-MDOProperty $r 'RecipientTypeDetails') -match 'Group')) { return $true }
+    } catch { $null = $_ }
+    return $false
+}
+
+function Initialize-MDOPlaceholderGroup {
+    <#
+        Creates an empty distribution group (no members) to stand in for a group a rule targets that does
+        not exist in the destination tenant. Keeps the original SMTP address when its domain is accepted
+        in the target; otherwise lets Exchange assign one. Returns the identity to reference in the rule
+        plus a result record for the summary.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Identity, [switch]$Execute)
+
+    $alias = ($Identity -replace '[^0-9A-Za-z]', '')
+    if ($alias.Length -gt 60) { $alias = $alias.Substring(0, 60) }
+    if (-not $alias) { $alias = 'mdoGroup' }
+
+    $params = @{ Name = $Identity; Alias = $alias; Type = 'Distribution' }
+    if ($Identity -match '@') {
+        $domain = ($Identity -split '@', 2)[1]
+        if ((Get-MDOConnectedDomain) -contains $domain) { $params['PrimarySmtpAddress'] = $Identity }
+    }
+
+    $desc = "auto-create distribution group '$Identity' (no members)"
+    if (-not $Execute) {
+        Write-Host "  [DRYRUN] New-DistributionGroup  $desc" -ForegroundColor Yellow
+        return [pscustomobject]@{ Target = $Identity; Result = [pscustomobject]@{ Success = $true; DryRun = $true; Cmdlet = 'New-DistributionGroup'; Description = $desc; Error = $null; Healed = $null } }
+    }
+    try {
+        $group = New-DistributionGroup @params -ErrorAction Stop
+        $target = Get-MDOProperty $group 'PrimarySmtpAddress'
+        if (-not $target) { $target = $Identity }
+        Write-Host "  [OK]     New-DistributionGroup  $desc" -ForegroundColor Green
+        return [pscustomobject]@{ Target = $target; Result = [pscustomobject]@{ Success = $true; DryRun = $false; Cmdlet = 'New-DistributionGroup'; Description = $desc; Error = $null; Healed = $null } }
+    }
+    catch {
+        Write-Host "  [FAIL]   New-DistributionGroup  $desc" -ForegroundColor Red
+        Write-Host "           $($_.Exception.Message)" -ForegroundColor DarkRed
+        return [pscustomobject]@{ Target = $null; Result = [pscustomobject]@{ Success = $false; DryRun = $false; Cmdlet = 'New-DistributionGroup'; Description = $desc; Error = $_.Exception.Message; Healed = $null } }
+    }
+}
+
+function Resolve-MDORuleGroup {
+    <#
+        Ensures every group a rule targets (SentToMemberOf, etc.) exists in the destination, auto-creating
+        an empty placeholder for any that do not. Returns a remap of original->target identity and the
+        result records of any groups created. Group params already in $Skip (e.g. when -IgnoreRecipientScope
+        is set) are left alone.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Object,
+        [string[]]$Skip = @(),
+        [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
+        [switch]$Execute
+    )
+
+    # Map value semantics: identity string = use that identity; $null = group is missing and was NOT
+    # created (drop it from the rule predicate).
+    $map = @{}
+    $results = @()
+    foreach ($param in $Script:MDORuleGroupParam) {
+        if ($Skip -contains $param) { continue }
+        foreach ($member in @(Get-MDOProperty $Object $param)) {
+            if ([string]::IsNullOrWhiteSpace($member) -or $map.ContainsKey($member)) { continue }
+            if (Test-MDOGroupPresent -Identity $member) { $map[$member] = $member; continue }
+
+            if (-not (Confirm-MDOCreateGroup -Identity $member -Mode $CreateMissingGroups)) {
+                Write-Host "  [SKIP]   group '$member' not created; it will be dropped from the rule." -ForegroundColor DarkGray
+                $map[$member] = $null
+                continue
+            }
+            $created = Initialize-MDOPlaceholderGroup -Identity $member -Execute:$Execute
+            $results += $created.Result
+            $map[$member] = if ($created.Target) { $created.Target } else { $null }
+        }
+    }
+    return [pscustomobject]@{ Map = $map; Results = $results }
+}
+
+# Per-run decisions about creating missing groups, so the user is asked at most once per group, with
+# 'all' / 'skip all' answers honoured for the rest of the run. Reset by Import-MDOConfiguration.
+$Script:MDOGroupDecision  = @{}
+$Script:MDOGroupCreateAll = $null   # $true = yes-to-all, $false = no-to-all, $null = keep asking
+
+function Confirm-MDOCreateGroup {
+    <#
+        Decides whether to create a missing group. 'Always'/'Never' answer without asking. 'Ask' prompts
+        once per group (Yes/No/All/Skip-all); a non-interactive host defaults to not creating.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Identity, [ValidateSet('Ask', 'Always', 'Never')][string]$Mode = 'Ask')
+
+    if ($Mode -eq 'Always') { return $true }
+    if ($Mode -eq 'Never')  { return $false }
+    if ($null -ne $Script:MDOGroupCreateAll)             { return $Script:MDOGroupCreateAll }
+    if ($Script:MDOGroupDecision.ContainsKey($Identity)) { return $Script:MDOGroupDecision[$Identity] }
+
+    $interactive = $true
+    try { $interactive = -not [System.Console]::IsInputRedirected } catch { $interactive = $false }
+    if (-not $interactive) {
+        Write-Host "  Group '$Identity' is missing and input is non-interactive; not creating (use -CreateMissingGroups Always to force)." -ForegroundColor DarkGray
+        $Script:MDOGroupDecision[$Identity] = $false
+        return $false
+    }
+
+    $answer = Read-Host "Rule targets group '$Identity' which does not exist in the destination. Create it empty (no members)? [Y]es / [N]o / [A]ll / [S]kip all"
+    switch -Regex ($answer.Trim()) {
+        '^(a|all)$'        { $Script:MDOGroupCreateAll = $true;  return $true }
+        '^(s|skip)$'       { $Script:MDOGroupCreateAll = $false; return $false }
+        '^(y|yes)$'        { $Script:MDOGroupDecision[$Identity] = $true;  return $true }
+        default            { $Script:MDOGroupDecision[$Identity] = $false; return $false }
+    }
+}
+
 function Import-MDORuleObject {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Type, [Parameter(Mandatory)]$Object, [string[]]$ExcludeParam = @(), [switch]$Execute)
+    param(
+        [Parameter(Mandatory)][string]$Type,
+        [Parameter(Mandatory)]$Object,
+        [string[]]$ExcludeParam = @(),
+        [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
+        [switch]$Execute
+    )
 
     $name = Get-MDOProperty $Object 'Name'
+    $results = @()
+
+    # Ensure the groups this rule targets exist. Missing ones are created only with consent
+    # (-CreateMissingGroups Ask prompts; Always/Never answer up front). Groups the user declines are
+    # dropped from the predicate so the rule still imports. Skipped entirely under -IgnoreRecipientScope.
+    $groups = Resolve-MDORuleGroup -Object $Object -Skip $ExcludeParam -CreateMissingGroups $CreateMissingGroups -Execute:$Execute
+    $results += $groups.Results
 
     if (Test-MDOObject -Type $Type -Identity $name) {
         $splat = ConvertTo-MDOSplat -InputObject $Object -TargetCmdlet "Set-$Type" -Exclude $ExcludeParam
         $splat['Identity'] = $name
-        $action = Invoke-MDOAction -Cmdlet "Set-$Type" -Parameters $splat -Description "update rule '$name'" -Execute:$Execute
+        $verb = 'Set'; $desc = "update rule '$name'"
     }
     else {
         # The link to the policy (e.g. -AntiPhishPolicy) is carried automatically: the rule object has a
         # same-named property which ConvertTo-MDOSplat maps onto the matching New- parameter.
         $splat = ConvertTo-MDOSplat -InputObject $Object -TargetCmdlet "New-$Type" -Exclude $ExcludeParam
         $splat['Name'] = $name
-        $action = Invoke-MDOAction -Cmdlet "New-$Type" -Parameters $splat -Description "create rule '$name'" -Execute:$Execute
+        $verb = 'New'; $desc = "create rule '$name'"
     }
+
+    foreach ($param in $Script:MDORuleGroupParam) {
+        if ($splat.ContainsKey($param)) {
+            # Remap to created/target identities; drop members the user declined to create (mapped to $null).
+            $remapped = @(foreach ($m in @($splat[$param])) {
+                if ($groups.Map.ContainsKey($m)) { if ($null -ne $groups.Map[$m]) { $groups.Map[$m] } } else { $m }
+            })
+            if ($remapped.Count) { $splat[$param] = $remapped } else { $splat.Remove($param) }
+        }
+    }
+
+    $action = Invoke-MDOAction -Cmdlet "$verb-$Type" -Parameters $splat -Description $desc -Execute:$Execute
+    $results += $action
 
     # Rule state (Enabled/Disabled) is not a New-/Set- parameter; apply it with Enable-/Disable-.
     $state = Get-MDOProperty $Object 'State'
     if ($state -eq 'Disabled') {
-        Invoke-MDOAction -Cmdlet "Disable-$Type" -Parameters @{ Identity = $name } -Description "disable rule '$name'" -Execute:$Execute | Out-Null
+        $results += Invoke-MDOAction -Cmdlet "Disable-$Type" -Parameters @{ Identity = $name } -Description "disable rule '$name'" -Execute:$Execute
     }
-    return $action
+    return $results
 }
 
 function Import-MDOSingletonObject {
@@ -183,6 +355,14 @@ function Write-MDOImportSummary {
     $failColour = if ($failed) { 'Red' } else { 'Gray' }
     Write-Host (" Failed            : {0}" -f $failed) -ForegroundColor $failColour
 
+    $adjusted = @($Results | Where-Object { $_.Healed })
+    if ($adjusted.Count) {
+        Write-Host "`n Adjusted (dropped invalid parameter(s), then applied):" -ForegroundColor Yellow
+        foreach ($result in $adjusted) {
+            Write-Host ("  - {0} {1}: dropped {2}" -f $result.Cmdlet, $result.Description, ($result.Healed -join ', ')) -ForegroundColor DarkYellow
+        }
+    }
+
     if ($failed) {
         Write-Host "`n Failures:" -ForegroundColor Red
         foreach ($result in ($Results | Where-Object { -not $_.Success })) {
@@ -202,10 +382,14 @@ function Import-MDOConfiguration {
         [switch]$Execute,
         [string[]]$IncludeCategory,
         [string[]]$IncludeType,
-        [switch]$IgnoreRecipientScope
+        [switch]$IgnoreRecipientScope,
+        [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask'
     )
 
     if (-not (Test-Path -LiteralPath $Path)) { throw "Export folder not found: $Path" }
+    # Reset per-run consent state for auto-creating missing groups.
+    $Script:MDOGroupDecision  = @{}
+    $Script:MDOGroupCreateAll = $null
 
     if (-not $Execute) {
         Write-Host '=== DRY RUN: no changes will be made. Re-run with -Execute to apply. ===' -ForegroundColor Yellow
@@ -244,7 +428,7 @@ function Import-MDOConfiguration {
         foreach ($obj in $objects) {
             switch ($entry.Category) {
                 'Policy'     { $results += Import-MDOPolicyObject     -Type $type -Object $obj -Execute:$Execute }
-                'Rule'       { $results += Import-MDORuleObject       -Type $type -Object $obj -ExcludeParam $ruleExclude -Execute:$Execute }
+                'Rule'       { $results += Import-MDORuleObject       -Type $type -Object $obj -ExcludeParam $ruleExclude -CreateMissingGroups $CreateMissingGroups -Execute:$Execute }
                 'Quarantine' { $results += Import-MDOQuarantineObject -Object $obj -Execute:$Execute }
                 'Singleton'  { $results += Import-MDOSingletonObject  -Entry $entry -Object $obj -Execute:$Execute }
                 'PresetRule' { $results += Import-MDOPresetRuleObject -Type $type -Object $obj -ExcludeParam $ruleExclude -Execute:$Execute }

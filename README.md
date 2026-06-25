@@ -229,12 +229,19 @@ with cmdlet help text). This is for review/audit, not for re-import.
 
 - A custom policy that doesn't exist in the target is created with `New-<Type>`.
 - A policy that already exists, or a built-in `Default`, is updated in place with `Set-<Type>`.
+- **Preset / Evaluation policies** (Standard, Strict, Evaluation) exist in the target under a different
+  auto-generated name, so they are matched by `RecommendedPolicyType` and **overwritten** in place rather
+  than duplicated (which the service rejects with "Already there is a 'Standard' recommended policy").
 - Rules are imported **after** policies and re-link to their policy automatically by name. Rule
   enabled/disabled state is reapplied with `Enable-`/`Disable-`.
 - Only parameters the target `New-`/`Set-` cmdlet actually accepts are sent. Read-only and
   tenant-specific fields (`Identity`, `Guid`, `WhenChanged`, `OriginatingServer`, …) are dropped.
+- **Self-healing**: if a create/update is rejected because of a single tenant-specific parameter
+  (e.g. `IntraOrgFilterState`, an out-of-range rule `Priority`, or impersonation settings on a new
+  Evaluation policy), that parameter is dropped and the call retried, so one quirk never loses the whole
+  object. Dropped parameters are listed in the summary's **Adjusted** section.
 - Every action is wrapped in try/catch, so one failure never aborts the run. A summary reports what
-  was applied, planned, and failed.
+  was applied, planned, adjusted, and failed.
 
 ## Notes & limitations
 
@@ -244,6 +251,10 @@ with cmdlet help text). This is for review/audit, not for re-import.
 - **Recipient scope** (`RecipientDomainIs`, `SentToMemberOf`, …) references domains and groups that are
   tenant-specific. By default it is replayed (and may fail on a missing target domain/group); use
   `-IgnoreRecipientScope` to import rules cleanly and re-scope them afterwards.
+- **Missing distribution groups** that a rule targets (`SentToMemberOf`, …) are handled by
+  `-CreateMissingGroups`: `Ask` (default) prompts to create an empty group per missing group, `Always`
+  creates them without asking, and `Never` drops the missing group from the rule. Created groups have
+  **no members** - add members afterwards.
 - **Built-in quarantine policies** (`DefaultFullAccessPolicy`, etc.) are intentionally skipped - they
   already exist identically in every tenant.
 - **Tenant Allow/Block "allow" entries** may require a service-enforced expiration window; such items

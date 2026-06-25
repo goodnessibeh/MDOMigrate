@@ -363,36 +363,87 @@ function ConvertTo-MDOSplat {
     return $splat
 }
 
+# Self-healing map: when a create/update fails because a single parameter is invalid in the target
+# tenant, drop just that parameter and retry instead of failing the whole object. Each rule pairs a
+# substring of the service error with the parameter(s) to remove. Recipient-scope group predicates are
+# deliberately NOT here - missing groups are auto-created instead (see Import-MDORuleObject).
+$Script:MDOHealMap = @(
+    @{ Pattern = 'IntraOrgFilterState';          Params = @('IntraOrgFilterState') }
+    @{ Pattern = 'rule priority is invalid';     Params = @('Priority') }
+    # New Evaluation AntiPhish policies reject every impersonation setting except organization-domains.
+    @{ Pattern = 'impersonation settings other than EnableOrganizationDomainsProtection'; Params = @(
+        'EnableTargetedUserProtection', 'TargetedUsersToProtect', 'TargetedUserProtectionAction',
+        'EnableTargetedDomainsProtection', 'TargetedDomainsToProtect', 'TargetedDomainProtectionAction',
+        'EnableMailboxIntelligence', 'EnableMailboxIntelligenceProtection', 'MailboxIntelligenceProtectionAction',
+        'EnableSimilarUsersSafetyTips', 'EnableSimilarDomainsSafetyTips', 'EnableUnusualCharactersSafetyTips',
+        'EnableViaTipForFirstContact', 'ImpersonationProtectionState', 'ExcludedDomains', 'ExcludedSenders',
+        'TargetedUserProtectionActionRecipients', 'TargetedDomainProtectionActionRecipients',
+        'MailboxIntelligenceProtectionActionRecipients'
+    ) }
+)
+
+function Get-MDOHealableParameter {
+    <# Given a service error message and the parameters still in play, returns which ones to drop and retry. #>
+    [CmdletBinding()]
+    param([string]$Message, $Available)
+    $present = @($Available)
+    $strip = @()
+    foreach ($rule in $Script:MDOHealMap) {
+        if ($Message -match $rule.Pattern) {
+            foreach ($p in $rule.Params) { if ($present -contains $p) { $strip += $p } }
+        }
+    }
+    return @($strip | Select-Object -Unique)
+}
+
 function Invoke-MDOAction {
     <#
         Runs one create/update action. With -Execute it calls the cmdlet (errors are caught, never fatal);
         without -Execute it only reports what would happen. Always returns a result record for the summary.
+        Self-healing: if the call fails because of a known-bad parameter (see MDOHealMap), that parameter
+        is dropped and the call retried, so one tenant-specific quirk does not lose the whole object. Any
+        dropped parameters are recorded on the result's Healed property and reported in the summary.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Cmdlet,
         [hashtable]$Parameters = @{},
         [string]$Description,
-        [switch]$Execute
+        [switch]$Execute,
+        [switch]$NoHeal
     )
 
     $paramSummary = (($Parameters.Keys | Sort-Object) -join ', ')
     if (-not $Execute) {
         Write-Host "  [DRYRUN] $Cmdlet  $Description" -ForegroundColor Yellow
         Write-Verbose "           params: $paramSummary"
-        return [pscustomobject]@{ Success = $true; DryRun = $true; Cmdlet = $Cmdlet; Description = $Description; Error = $null }
+        return [pscustomobject]@{ Success = $true; DryRun = $true; Cmdlet = $Cmdlet; Description = $Description; Error = $null; Healed = $null }
     }
 
-    try {
-        & $Cmdlet @Parameters -ErrorAction Stop | Out-Null
-        Write-Host "  [OK]     $Cmdlet  $Description" -ForegroundColor Green
-        return [pscustomobject]@{ Success = $true; DryRun = $false; Cmdlet = $Cmdlet; Description = $Description; Error = $null }
-    }
-    catch {
-        Write-Host "  [FAIL]   $Cmdlet  $Description" -ForegroundColor Red
-        Write-Host "           $($_.Exception.Message)" -ForegroundColor DarkRed
-        return [pscustomobject]@{ Success = $false; DryRun = $false; Cmdlet = $Cmdlet; Description = $Description; Error = $_.Exception.Message }
+    $params = $Parameters.Clone()
+    $healed = @()
+    $maxAttempts = $Script:MDOHealMap.Count + 1
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            & $Cmdlet @params -ErrorAction Stop | Out-Null
+            $suffix = if ($healed.Count) { " (dropped: $($healed -join ', '))" } else { '' }
+            Write-Host "  [OK]     $Cmdlet  $Description$suffix" -ForegroundColor Green
+            return [pscustomobject]@{ Success = $true; DryRun = $false; Cmdlet = $Cmdlet; Description = $Description; Error = $null; Healed = $(if ($healed.Count) { $healed } else { $null }) }
+        }
+        catch {
+            $message = $_.Exception.Message
+            $strip = if ($NoHeal -or $attempt -ge $maxAttempts) { @() } else { Get-MDOHealableParameter -Message $message -Available $params.Keys }
+            if ($strip.Count) {
+                foreach ($p in $strip) { $params.Remove($p) }
+                $healed += $strip
+                Write-Host "  [HEAL]   $Cmdlet  retrying without $($strip -join ', ')  ($Description)" -ForegroundColor DarkYellow
+                continue
+            }
+            Write-Host "  [FAIL]   $Cmdlet  $Description" -ForegroundColor Red
+            Write-Host "           $message" -ForegroundColor DarkRed
+            return [pscustomobject]@{ Success = $false; DryRun = $false; Cmdlet = $Cmdlet; Description = $Description; Error = $message; Healed = $(if ($healed.Count) { $healed } else { $null }) }
+        }
     }
 }
 
-Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOConfig, Get-MDODomainFromUpn, Resolve-MDOTenant, Get-MDOConnectedDomain, Test-MDOExchangeConnected, Assert-MDOTenantDomain, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction
+Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOConfig, Get-MDODomainFromUpn, Resolve-MDOTenant, Get-MDOConnectedDomain, Test-MDOExchangeConnected, Assert-MDOTenantDomain, Get-MDOHealableParameter, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction
