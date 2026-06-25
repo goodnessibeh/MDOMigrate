@@ -26,15 +26,23 @@
     tenant-specific domains and group identities that do not exist in the target tenant; omitting them
     lets rules import cleanly, after which you re-scope them to the target's domains/groups.
 
+.PARAMETER Domain
+    The DESTINATION (target) tenant's domain (e.g. destination.onmicrosoft.com). The session is
+    verified to serve this domain before anything is written, so a session still signed into the
+    source tenant can never be written to. Defaults to the Destination.Domain in tenants.json.
+
 .PARAMETER UserPrincipalName
-    Optional admin UPN to pre-fill the sign-in prompt.
+    Admin UPN to pre-fill the sign-in prompt. Defaults to the Destination.UserPrincipalName in tenants.json.
+
+.PARAMETER ConfigPath
+    Path to the tenant config file. Defaults to tenants.json in the repository root.
 
 .EXAMPLE
-    ./Import-MDOConfig.ps1                          # dry run, latest export on Desktop
-    ./Import-MDOConfig.ps1 -Execute                 # apply latest export
-    ./Import-MDOConfig.ps1 -IncludeCategory Policy,Rule -Execute
-    ./Import-MDOConfig.ps1 -IgnoreRecipientScope -Execute
-    ./Import-MDOConfig.ps1 -Path 'C:\backups\20260625-120000' -Execute   # explicit export folder
+    ./scripts/Import-MDOConfig.ps1                          # dry run, latest export on Desktop
+    ./scripts/Import-MDOConfig.ps1 -Execute                 # apply latest export
+    ./scripts/Import-MDOConfig.ps1 -IncludeCategory Policy,Rule -Execute
+    ./scripts/Import-MDOConfig.ps1 -IgnoreRecipientScope -Execute
+    ./scripts/Import-MDOConfig.ps1 -Path 'C:\backups\20260625-120000' -Execute   # explicit export folder
 #>
 [CmdletBinding()]
 param(
@@ -43,17 +51,24 @@ param(
     [string[]]$IncludeCategory,
     [string[]]$IncludeType,
     [switch]$IgnoreRecipientScope,
-    [string]$UserPrincipalName
+    [string]$Domain,
+    [string]$UserPrincipalName,
+    [string]$ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'src/MDOCommon.psm1') -Force
-Import-Module (Join-Path $PSScriptRoot 'src/MDOImport.psm1') -Force
+$RepoRoot = Split-Path $PSScriptRoot -Parent
+Import-Module (Join-Path $RepoRoot 'src/MDOCommon.psm1') -Force
+Import-Module (Join-Path $RepoRoot 'src/MDOImport.psm1') -Force
 
 $Path = Resolve-MDOImportPath -Path $Path
 Write-Host "Importing from: $Path" -ForegroundColor Cyan
 
-Connect-MDOTenant -UserPrincipalName $UserPrincipalName
+$dest = Resolve-MDOTenant -Role Destination -ConfigPath $ConfigPath -Domain $Domain -UserPrincipalName $UserPrincipalName
+Connect-MDOTenant -UserPrincipalName $dest.UserPrincipalName -TenantDomain $dest.Domain
+
+# Final hard guard right before writing: never apply to the wrong tenant.
+if ($Execute) { Assert-MDOTenantDomain -Domain $dest.Domain }
 
 $importParams = @{ Path = $Path; Execute = $Execute; IgnoreRecipientScope = $IgnoreRecipientScope }
 if ($IncludeCategory) { $importParams['IncludeCategory'] = $IncludeCategory }

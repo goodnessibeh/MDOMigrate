@@ -4,6 +4,13 @@ mdo-export/
 *.xlsx
 *.csv
 
+# Real tenant config holds domains/UPNs; keep it local. The example is committed.
+tenants.json
+!tenants.example.json
+
+# Orchestrator run logs
+logs/
+
 # PowerShell / editor noise
 *.log
 .vscode/

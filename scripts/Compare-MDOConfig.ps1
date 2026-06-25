@@ -23,9 +23,16 @@
 .PARAMETER CsvPath
     Optional path to also write the drift report as CSV.
 
+.PARAMETER Domain
+    The DESTINATION (target) tenant's domain, used to verify the session before snapshotting with
+    -ExportTarget. Defaults to the Destination.Domain in tenants.json.
+
+.PARAMETER ConfigPath
+    Path to the tenant config file. Defaults to tenants.json in the repository root.
+
 .EXAMPLE
-    ./Compare-MDOConfig.ps1 -ExportTarget -CsvPath parity.csv     # latest Desktop export vs live target
-    ./Compare-MDOConfig.ps1 -ReferencePath C:\backups\source -DifferencePath C:\backups\target
+    ./scripts/Compare-MDOConfig.ps1 -ExportTarget -CsvPath parity.csv     # latest Desktop export vs live target
+    ./scripts/Compare-MDOConfig.ps1 -ReferencePath C:\backups\source -DifferencePath C:\backups\target
 #>
 [CmdletBinding()]
 param(
@@ -33,14 +40,17 @@ param(
     [string]$DifferencePath,
     [switch]$ExportTarget,
     [string[]]$IncludeType,
+    [string]$Domain,
     [string]$UserPrincipalName,
+    [string]$ConfigPath,
     [string]$CsvPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'src/MDOCommon.psm1') -Force
-Import-Module (Join-Path $PSScriptRoot 'src/MDOExport.psm1') -Force
-Import-Module (Join-Path $PSScriptRoot 'src/MDOCompare.psm1') -Force
+$RepoRoot = Split-Path $PSScriptRoot -Parent
+Import-Module (Join-Path $RepoRoot 'src/MDOCommon.psm1') -Force
+Import-Module (Join-Path $RepoRoot 'src/MDOExport.psm1') -Force
+Import-Module (Join-Path $RepoRoot 'src/MDOCompare.psm1') -Force
 
 # Default the reference (source) to the most recent export on the Desktop.
 $ReferencePath = Resolve-MDOImportPath -Path $ReferencePath
@@ -50,7 +60,8 @@ if (-not $DifferencePath) {
     if (-not $ExportTarget) {
         throw 'Provide -DifferencePath (a target export folder) or -ExportTarget to snapshot the connected tenant.'
     }
-    Connect-MDOTenant -UserPrincipalName $UserPrincipalName
+    $dest = Resolve-MDOTenant -Role Destination -ConfigPath $ConfigPath -Domain $Domain -UserPrincipalName $UserPrincipalName
+    Connect-MDOTenant -UserPrincipalName $dest.UserPrincipalName -TenantDomain $dest.Domain
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $DifferencePath = Join-Path ([System.IO.Path]::GetTempPath()) "mdo-target-$stamp"
     Write-Host "Snapshotting target tenant to $DifferencePath ..." -ForegroundColor Cyan

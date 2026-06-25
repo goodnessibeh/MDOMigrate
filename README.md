@@ -4,8 +4,9 @@
 policy configuration between tenants.**
 
 MDOMigrate snapshots every threat policy in a source tenant to JSON, recreates them in a target tenant
-for full configuration parity, and compares the two to prove they match. It is built for tenant-to-tenant
-migrations, building a known-good baseline, disaster-recovery rebuilds, and config drift auditing.
+for full configuration parity, and compares the two to prove they match. One command
+(`Invoke-MDOMigration.ps1`) runs the whole pipeline — connect to source, export, connect to
+destination, import, verify — driven by a small config file and logged end to end.
 
 > **Why PowerShell, not Microsoft Graph?**
 > As of 2026 the Microsoft Graph API does **not** expose MDO/EOP threat policies (anti-phishing,
@@ -15,12 +16,56 @@ migrations, building a known-good baseline, disaster-recovery rebuilds, and conf
 
 ---
 
+## Use cases
+
+### 1. Migrate a security setup to a new tenant — MSSPs & consultants
+You are standing up a brand-new Microsoft 365 tenant for a customer (or moving them off an old one) and
+need their hard-won MDO/EOP posture — anti-phishing, anti-spam, Safe Links/Attachments, quarantine,
+Tenant Allow/Block List — recreated faithfully in the destination. MDOMigrate exports the source,
+authenticates to **both tenants in succession**, and rebuilds the configuration in the destination,
+then proves parity. The `tenants.json` config makes the source/destination pair explicit so the import
+can never land on the wrong tenant.
+
+### 2. Keep dev / test / staging / production in parity
+Teams that maintain separate MDO environments (or separate tenants per ring) can promote a known-good
+security baseline outward — author and validate in **test**, then push the same policy set to **dev**,
+**staging**, and **production**, comparing after each step so drift is caught immediately. Run it on a
+schedule to continuously detect and report configuration drift between environments.
+
+### 3. Back up configuration before major changes
+Before a risky change — a preset security policy rollout, a large anti-spam retune, a tenant
+reorganization, or an admin handover — snapshot the current configuration to versionable JSON. If the
+change goes wrong, re-import the backup to restore the previous posture. The export is plain JSON, so
+it fits naturally in source control, ticketing attachments, or your backup store as point-in-time
+evidence of what the tenant looked like.
+
+### 4. Migrate to another email security provider — *roadmap*
+MDOMigrate already captures your MDO/EOP posture as a structured, provider-neutral JSON model. Upcoming
+releases will add translators that map that model onto other email security platforms, so you can move
+**off** (or run **alongside**) Microsoft Defender without rebuilding every policy by hand:
+
+- **Proofpoint** — planned
+- **Mimecast** — planned
+- **Google Workspace** (Gmail security / Workspace email protections) — planned
+
+Until those ship, the export is still the useful first step: it gives you a complete, documented
+inventory of every policy and rule to translate.
+
+---
+
 ## Features
 
+- **One-command pipeline** — `Invoke-MDOMigration.ps1` runs export → import → (optional) compare in a
+  single shell, prompting for anything not in the config and logging the whole run.
+- **Config-driven** — a `tenants.json` file names the **Source** and **Destination** tenants (domain +
+  admin UPN). Missing UPNs are prompted for at run time.
 - **Export** all supported policy and rule types to one JSON file per type (plus a manifest).
 - **Import** them into another tenant, choosing `New-` (create) vs `Set-` (update) automatically.
 - **Compare** source vs target and report exactly what is missing, extra, or changed.
-- **Safe by default** — import runs as a dry run; you must pass `-Execute` to make changes.
+- **Safe by default** — import runs as a dry run; you must pass `-Live` (orchestrator) / `-Execute`
+  (script) to make changes.
+- **Wrong-tenant guard** — the destination domain from the config is verified on the live connection
+  *before any write*, so a session still signed into the source tenant can never be written to.
 - **Cross-tenant safe** — identity, GUID, and timestamp fields are never replayed, so imports don't
   fail with "identity/UUID" errors. Recipient scope (tenant-specific domains/groups) can be dropped
   with one switch.
@@ -47,7 +92,7 @@ migrations, building a known-good baseline, disaster-recovery rebuilds, and conf
 - **PowerShell 7.0+**
 - Modules (auto-installed on first run): [`ExchangeOnlineManagement`](https://www.powershellgallery.com/packages/ExchangeOnlineManagement)
   and, for the optional report, [`ImportExcel`](https://github.com/dfinke/ImportExcel)
-- A **Global Administrator** or **Security Administrator** account in each tenant.
+- A **Global Administrator** or **Security Administrator** account in **each** tenant.
 
 ## Install
 
@@ -56,54 +101,104 @@ git clone https://github.com/goodnessibeh/MDOMigrate.git
 cd MDOMigrate
 ```
 
-## Usage
+## Configure
 
-### 1. Export from the source tenant
+Copy the example config and fill in your tenants. `tenants.json` is git-ignored (it holds your domains
+and admin UPNs); the example is committed.
 
-```powershell
-./Export-MDOConfig.ps1 -UserPrincipalName admin@source.onmicrosoft.com
+```bash
+cp tenants.example.json tenants.json
 ```
 
-By default this writes to a timestamped folder under your Desktop, e.g.
-`<Desktop>\MDOMigrate-Exports\20260625-120000\`, containing one JSON file per type and a `manifest.json`.
-(Override with `-OutputPath` if you want a different location.)
+```json
+{
+  "Source":      { "Domain": "source.onmicrosoft.com",      "UserPrincipalName": "admin@source.onmicrosoft.com" },
+  "Destination": { "Domain": "destination.onmicrosoft.com", "UserPrincipalName": "admin@destination.onmicrosoft.com" }
+}
+```
 
-### 2. Import into the target tenant
+- **Domain** — the tenant's domain (e.g. `contoso.onmicrosoft.com`). Used to verify the live connection
+  is the right tenant before reading/writing. Leave blank to disable the guard for that side (you'll get
+  a warning).
+- **UserPrincipalName** — the admin UPN used to pre-fill the sign-in prompt. **Leave it empty and you'll
+  be prompted for it in the terminal** at run time.
 
-Always dry-run first — it prints every create/update it *would* make and changes nothing. With no
-`-Path`, it automatically uses the **most recent export** under `<Desktop>\MDOMigrate-Exports`:
+## Usage
+
+### Quick start — the whole pipeline in one command
+
+`Invoke-MDOMigration.ps1` (in the repo root) reads `tenants.json`, then exports from the source,
+connects to the destination, and imports — prompting for any missing UPN and writing a transcript log
+under `<export base>\logs`.
 
 ```powershell
-./Import-MDOConfig.ps1 -UserPrincipalName admin@target.onmicrosoft.com
+# Simulate the full migration (dry run — nothing is written). This is the default.
+./Invoke-MDOMigration.ps1
+
+# Apply it to the destination tenant (asks for a 'yes' confirmation before writing).
+./Invoke-MDOMigration.ps1 -Live
+
+# Apply, then run a parity check between the source export and the destination.
+./Invoke-MDOMigration.ps1 -Live -Compare
+
+# Re-import the most recent export without re-exporting the source.
+./Invoke-MDOMigration.ps1 -SkipExport -Live
+```
+
+You authenticate to the **source** tenant for the export, then to the **destination** tenant for the
+import, one after another in the same window. Useful switches: `-IncludeCategory` / `-IncludeType` /
+`-IgnoreRecipientScope` (passed through to the import), `-OutputPath` (export location), `-ExportPath`
+(import a specific older export), `-Force` (skip the write confirmation), `-LogPath`.
+
+### Or run each step yourself
+
+The individual scripts live in `scripts/` and honor the same `tenants.json` (override with `-Domain` /
+`-UserPrincipalName` / `-ConfigPath`).
+
+**1. Export from the source tenant**
+
+```powershell
+./scripts/Export-MDOConfig.ps1
+```
+
+Writes to a timestamped folder under your Desktop, e.g.
+`<Desktop>\MDOMigrate-Exports\20260625-120000\`, containing one JSON file per type and a `manifest.json`.
+(Override with `-OutputPath`.)
+
+**2. Import into the target tenant**
+
+Always dry-run first — it prints every create/update it *would* make and changes nothing. With no
+`-Path`, it uses the **most recent export** under `<Desktop>\MDOMigrate-Exports`:
+
+```powershell
+./scripts/Import-MDOConfig.ps1
 ```
 
 When the plan looks right, apply it:
 
 ```powershell
-./Import-MDOConfig.ps1 -Execute
+./scripts/Import-MDOConfig.ps1 -Execute
 ```
 
 To import a specific older export, pass `-Path '<Desktop>\MDOMigrate-Exports\20260101-090000'`.
 
-Useful options:
-
 ```powershell
 # Limit scope by category or type
-./Import-MDOConfig.ps1 -IncludeCategory Policy,Rule -Execute
-./Import-MDOConfig.ps1 -IncludeType SafeLinksPolicy,SafeLinksRule -Execute
+./scripts/Import-MDOConfig.ps1 -IncludeCategory Policy,Rule -Execute
+./scripts/Import-MDOConfig.ps1 -IncludeType SafeLinksPolicy,SafeLinksRule -Execute
 
 # Drop recipient conditions (domains/groups) that don't exist in the target tenant, then re-scope later
-./Import-MDOConfig.ps1 -IgnoreRecipientScope -Execute
+./scripts/Import-MDOConfig.ps1 -IgnoreRecipientScope -Execute
 ```
 
-### 3. Verify parity
+**3. Verify parity**
 
 ```powershell
 # Snapshot the connected target tenant and diff it against the latest Desktop export
-./Compare-MDOConfig.ps1 -ExportTarget -CsvPath parity.csv
+./scripts/Compare-MDOConfig.ps1 -ExportTarget -CsvPath parity.csv
 
 # Or compare two export folders directly
-./Compare-MDOConfig.ps1 -ReferencePath ./export-source -DifferencePath ./export-target
+./scripts/Compare-MDOConfig.ps1 -ReferencePath ./export-source -DifferencePath ./export-target
 ```
 
 The parity report lists objects **missing in target**, **extra in target**, and any **changed
@@ -111,11 +206,11 @@ properties** — ignoring identity/UUID/timestamp fields so only meaningful drif
 
 ### Optional: human-readable report
 
-`Get-MDOPolicyReport.ps1` produces a documentation report (JSON + Excel, one row per property with
-cmdlet help text). This is for review/audit, not for re-import.
+`scripts/Get-MDOPolicyReport.ps1` produces a documentation report (JSON + Excel, one row per property
+with cmdlet help text). This is for review/audit, not for re-import.
 
 ```powershell
-./Get-MDOPolicyReport.ps1 -CustomerName "Contoso"
+./scripts/Get-MDOPolicyReport.ps1 -CustomerName "Contoso"
 ```
 
 ## How import decides create vs update
@@ -131,6 +226,9 @@ cmdlet help text). This is for review/audit, not for re-import.
 
 ## Notes & limitations
 
+- **Run the import against the destination, not the source.** Because both connections happen in one
+  shell, the wrong-tenant guard (`Destination.Domain`) exists to stop an import from accidentally
+  re-targeting the tenant you just exported. Set the domains in `tenants.json` to keep it active.
 - **Recipient scope** (`RecipientDomainIs`, `SentToMemberOf`, …) references domains and groups that are
   tenant-specific. By default it is replayed (and may fail on a missing target domain/group); use
   `-IgnoreRecipientScope` to import rules cleanly and re-scope them afterwards.
@@ -140,20 +238,24 @@ cmdlet help text). This is for review/audit, not for re-import.
   surface as reported failures rather than being silently dropped.
 - **Preset security policy rules** can require the preset to be enabled in the portal first; those
   failures are reported clearly.
-- Always review the dry-run output before running `-Execute` against a production tenant.
+- Always review the dry-run output before running `-Live` / `-Execute` against a production tenant.
 
 ## Project layout
 
 ```
-Export-MDOConfig.ps1        # entry: export source tenant
-Import-MDOConfig.ps1        # entry: import into target tenant (dry run by default)
-Compare-MDOConfig.ps1       # entry: parity comparison
-Get-MDOPolicyReport.ps1     # entry: optional JSON/Excel documentation report
-Set-MDORuleScope.ps1        # entry: scope a rule set to all accepted domains (dry run by default)
-src/MDOCommon.psm1          # connect, type registry, parameter mapping, read-only denylist
-src/MDOExport.psm1          # export engine
-src/MDOImport.psm1          # import engine
-src/MDOCompare.psm1         # comparison engine
+Invoke-MDOMigration.ps1         # entry: one-command end-to-end migration (export -> import -> verify)
+tenants.example.json            # copy to tenants.json and fill in Source/Destination (git-ignored)
+scripts/
+  Export-MDOConfig.ps1          # export source tenant
+  Import-MDOConfig.ps1          # import into target tenant (dry run by default)
+  Compare-MDOConfig.ps1         # parity comparison
+  Get-MDOPolicyReport.ps1       # optional JSON/Excel documentation report
+  Set-MDORuleScope.ps1          # scope a rule set to all accepted domains (dry run by default)
+src/
+  MDOCommon.psm1                # config, connect, type registry, parameter mapping, read-only denylist
+  MDOExport.psm1                # export engine
+  MDOImport.psm1                # import engine
+  MDOCompare.psm1               # comparison engine
 PSScriptAnalyzerSettings.psd1
 ```
 

@@ -28,9 +28,11 @@ Install-Module ImportExcel -Scope CurrentUser
 
 | File | Responsibility |
 |------|----------------|
-| `Export-MDOConfig.ps1` / `Import-MDOConfig.ps1` / `Compare-MDOConfig.ps1` | Thin entry points (arg parsing + connect) |
-| `Get-MDOPolicyReport.ps1` | Optional JSON/Excel documentation report |
-| `src/MDOCommon.psm1` | Connect, type registry, parameter mapping, read-only/identity denylist |
+| `Invoke-MDOMigration.ps1` | Root entry point: end-to-end orchestrator (export → import → verify) |
+| `tenants.example.json` | Template for `tenants.json` (Source/Destination domain + UPN) |
+| `scripts/Export-MDOConfig.ps1` / `Import-MDOConfig.ps1` / `Compare-MDOConfig.ps1` | Thin per-step entry points (arg parsing + connect) |
+| `scripts/Get-MDOPolicyReport.ps1` | Optional JSON/Excel documentation report |
+| `src/MDOCommon.psm1` | Config, connect, type registry, parameter mapping, read-only/identity denylist |
 | `src/MDOExport.psm1` | Export engine |
 | `src/MDOImport.psm1` | Import engine |
 | `src/MDOCompare.psm1` | Comparison engine |

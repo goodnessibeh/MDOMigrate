@@ -78,6 +78,82 @@ function Get-MDOProperty {
     return $Default
 }
 
+function Get-MDOConfig {
+    <#
+        Loads the tenant config file (tenants.json) that names the Source and Destination tenants.
+        Default location is tenants.json in the repository root (the parent of this src/ folder).
+        Returns the parsed object, or $null when no config file exists. Shape:
+
+            { "Source":      { "Domain": "source.onmicrosoft.com",      "UserPrincipalName": "admin@source.com" },
+              "Destination": { "Domain": "destination.onmicrosoft.com", "UserPrincipalName": "admin@dest.com"  } }
+    #>
+    [CmdletBinding()]
+    param([string]$ConfigPath)
+
+    if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $ConfigPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'tenants.json'
+    }
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $null }
+    try { return (Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json) }
+    catch { throw "Failed to read tenant config '$ConfigPath': $($_.Exception.Message)" }
+}
+
+function Resolve-MDOTenant {
+    <#
+        Resolves the Domain + UserPrincipalName for one tenant role ('Source' or 'Destination').
+        Explicit parameters win over the config file, which wins over nothing. Either may be absent:
+        Domain enables the wrong-tenant guard; UPN just pre-fills the sign-in prompt.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('Source', 'Destination')][string]$Role,
+        [string]$ConfigPath,
+        [string]$Domain,
+        [string]$UserPrincipalName
+    )
+
+    $entry = $null
+    $config = Get-MDOConfig -ConfigPath $ConfigPath
+    if ($config) { $entry = Get-MDOProperty $config $Role }
+
+    if ([string]::IsNullOrWhiteSpace($Domain)            -and $entry) { $Domain            = Get-MDOProperty $entry 'Domain' }
+    if ([string]::IsNullOrWhiteSpace($UserPrincipalName) -and $entry) { $UserPrincipalName = Get-MDOProperty $entry 'UserPrincipalName' }
+
+    return [pscustomobject]@{
+        Role              = $Role
+        Domain            = $Domain
+        UserPrincipalName = $UserPrincipalName
+    }
+}
+
+function Get-MDOConnectedDomain {
+    <# Returns the accepted domains of the currently connected Exchange Online tenant, or $null if not connected. #>
+    [CmdletBinding()]
+    param()
+    try { return @((Get-AcceptedDomain -ErrorAction Stop).DomainName) }
+    catch { return $null }
+}
+
+function Assert-MDOTenantDomain {
+    <#
+        Hard guard: throws unless the connected Exchange Online tenant serves $Domain. Call this right
+        before any write so a misdirected session (e.g. still signed into the source tenant) can never
+        be written to. A no-op when $Domain is empty.
+    #>
+    [CmdletBinding()]
+    param([string]$Domain)
+
+    if ([string]::IsNullOrWhiteSpace($Domain)) { return }
+    $domains = Get-MDOConnectedDomain
+    if (-not $domains) {
+        throw "Not connected to Exchange Online; cannot verify the target tenant '$Domain'."
+    }
+    if ($domains -notcontains $Domain) {
+        throw "Connected tenant does NOT serve '$Domain' (accepted domains: $($domains -join ', ')). " +
+              "Refusing to write. Sign in with an admin of the '$Domain' tenant."
+    }
+}
+
 function Get-MDOTypeRegistry {
     <#
         Catalogue of MDO/EOP object types.
@@ -131,12 +207,20 @@ function Get-MDOTypeRegistry {
 function Connect-MDOTenant {
     <#
         Connects to Exchange Online and Security & Compliance PowerShell as a direct tenant admin.
-        Re-uses an existing session if one is already open.
+
+        Tenant awareness: pass -TenantDomain to bind the connection to a specific tenant. An existing
+        session is re-used only when it serves that domain; otherwise it is disconnected and a fresh
+        sign-in to the requested tenant is prompted. This is what lets export (source) and import
+        (destination) authenticate to two different tenants in succession from one shell. After
+        connecting, the tenant is verified to serve -TenantDomain (it throws if not), so a misdirected
+        session can never be used. Use -ForceReconnect to always drop any open session first.
     #>
     [CmdletBinding()]
     param(
         [string]$UserPrincipalName,
-        [switch]$SkipSecurityCompliance
+        [string]$TenantDomain,
+        [switch]$SkipSecurityCompliance,
+        [switch]$ForceReconnect
     )
 
     if (-not (Get-Module ExchangeOnlineManagement -ListAvailable)) {
@@ -145,13 +229,33 @@ function Connect-MDOTenant {
     }
     Import-Module ExchangeOnlineManagement -DisableNameChecking -ErrorAction Stop
 
-    $exoConnected = $false
-    try { $null = Get-AcceptedDomain -ErrorAction Stop; $exoConnected = $true } catch { $exoConnected = $false }
+    $currentDomains = Get-MDOConnectedDomain
+    $exoConnected   = $null -ne $currentDomains
+
+    # Decide whether the open session (if any) can be re-used.
+    $servesTarget = -not $TenantDomain -or ($exoConnected -and ($currentDomains -contains $TenantDomain))
+    if ($exoConnected -and ($ForceReconnect -or -not $servesTarget)) {
+        if ($TenantDomain -and -not $servesTarget) {
+            Write-Host "Open session is a different tenant (serves: $($currentDomains -join ', ')); it does not serve '$TenantDomain'." -ForegroundColor Yellow
+        }
+        Write-Host 'Disconnecting current Exchange Online / Security & Compliance session...' -ForegroundColor Yellow
+        # Disconnect-ExchangeOnline closes both the EXO and the IPPS connections in this session.
+        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
+        $exoConnected = $false
+    }
+
     if (-not $exoConnected) {
-        Write-Host 'Connecting to Exchange Online...' -ForegroundColor Cyan
+        $for = if ($TenantDomain) { " ($TenantDomain)" } else { '' }
+        Write-Host "Connecting to Exchange Online$for..." -ForegroundColor Cyan
         $exoParams = @{ ShowBanner = $false }
         if ($UserPrincipalName) { $exoParams['UserPrincipalName'] = $UserPrincipalName }
         Connect-ExchangeOnline @exoParams
+    }
+
+    # Hard verify: confirm we landed on the requested tenant before anyone writes to it.
+    if ($TenantDomain) {
+        Assert-MDOTenantDomain -Domain $TenantDomain
+        Write-Host "Connected to tenant serving '$TenantDomain'." -ForegroundColor Green
     }
 
     if (-not $SkipSecurityCompliance) {
@@ -240,4 +344,4 @@ function Invoke-MDOAction {
     }
 }
 
-Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction
+Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOConfig, Resolve-MDOTenant, Get-MDOConnectedDomain, Assert-MDOTenantDomain, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction
