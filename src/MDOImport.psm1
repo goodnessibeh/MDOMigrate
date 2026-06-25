@@ -193,6 +193,7 @@ function Import-MDORuleObject {
         [Parameter(Mandatory)][string]$Type,
         [Parameter(Mandatory)]$Object,
         [string[]]$ExcludeParam = @(),
+        [string]$LinkParam,
         [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
         [switch]$Execute
     )
@@ -207,7 +208,10 @@ function Import-MDORuleObject {
     $results += $groups.Results
 
     if (Test-MDOObject -Type $Type -Identity $name) {
-        $splat = ConvertTo-MDOSplat -InputObject $Object -TargetCmdlet "Set-$Type" -Exclude $ExcludeParam
+        # The policy link (e.g. -SafeLinksPolicy) is fixed at creation; re-sending it on an update fails
+        # with "Policy X already has rule X associated with it", so drop it from the Set- splat.
+        $setExclude = if ($LinkParam) { @($ExcludeParam) + $LinkParam } else { $ExcludeParam }
+        $splat = ConvertTo-MDOSplat -InputObject $Object -TargetCmdlet "Set-$Type" -Exclude $setExclude
         $splat['Identity'] = $name
         $verb = 'Set'; $desc = "update rule '$name'"
     }
@@ -385,6 +389,11 @@ function Enable-MDOOrganizationCustomization {
         Write-Host "  [DRYRUN] Enable-OrganizationCustomization  (provision tenant for Tenant Allow/Block List)" -ForegroundColor Yellow
         return $true
     }
+    if (-not (Get-Command Enable-OrganizationCustomization -ErrorAction SilentlyContinue)) {
+        Write-Host "  Cannot auto-provision here: 'Enable-OrganizationCustomization' is not available in this session." -ForegroundColor Yellow
+        Write-Host "  Enable organization customization in the destination (run Enable-OrganizationCustomization from a full Exchange Online PowerShell session, or enable the Tenant Allow/Block List in the Microsoft Defender portal), then re-run with -IncludeType TenantAllowBlockListItems." -ForegroundColor DarkGray
+        return $false
+    }
     try {
         Enable-OrganizationCustomization -ErrorAction Stop
         Write-Host "  [OK]     Enable-OrganizationCustomization  - provisioning started (can take time to fully propagate)" -ForegroundColor Green
@@ -493,7 +502,7 @@ function Import-MDOConfiguration {
             $index++
             $itemResult = switch ($entry.Category) {
                 'Policy'     { Import-MDOPolicyObject     -Type $type -Object $obj -Execute:$Execute }
-                'Rule'       { Import-MDORuleObject       -Type $type -Object $obj -ExcludeParam $ruleExclude -CreateMissingGroups $CreateMissingGroups -Execute:$Execute }
+                'Rule'       { Import-MDORuleObject       -Type $type -Object $obj -ExcludeParam $ruleExclude -LinkParam (Get-MDOProperty $entry 'LinkParam') -CreateMissingGroups $CreateMissingGroups -Execute:$Execute }
                 'Quarantine' { Import-MDOQuarantineObject -Object $obj -Execute:$Execute }
                 'Singleton'  { Import-MDOSingletonObject  -Entry $entry -Object $obj -Execute:$Execute }
                 'PresetRule' { Import-MDOPresetRuleObject -Type $type -Object $obj -ExcludeParam $ruleExclude -Execute:$Execute }

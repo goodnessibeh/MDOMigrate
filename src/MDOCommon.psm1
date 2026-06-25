@@ -354,7 +354,9 @@ function ConvertTo-MDOSplat {
         if (($value -is [string]) -and [string]::IsNullOrWhiteSpace($value)) { continue }
 
         if (($value -is [System.Collections.IEnumerable]) -and ($value -isnot [string])) {
-            $items = @($value)
+            # Drop null / blank elements: an empty entry in a sender/domain list is rejected by the
+            # target cmdlet ("Invalid sender address specified: ''" / "value '' is already present").
+            $items = @($value | Where-Object { $null -ne $_ -and -not (($_ -is [string]) -and [string]::IsNullOrWhiteSpace($_)) })
             if ($items.Count -eq 0) { continue }
             $value = $items
         }

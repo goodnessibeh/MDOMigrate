@@ -192,13 +192,20 @@ try {
     if ($IncludeType)     { $importParams['IncludeType']     = $IncludeType }
     $importResults = Import-MDOConfiguration @importParams
 
-    # ---- Step 3: parity comparison (runs on completion unless -SkipCompare) -------------------------
+    # ---- Step 3: parity comparison (runs on completion, right after the import summary) -------------
+    # Wrapped so a snapshot/compare hiccup can never swallow the run or hide the import results.
     if (-not $SkipCompare) {
-        Write-Host "`n[3/3] Comparing source export against the destination tenant..." -ForegroundColor Cyan
-        $snapshot = Join-Path ([System.IO.Path]::GetTempPath()) "mdo-dest-$stamp"
-        Export-MDOConfiguration -Path $snapshot | Out-Null
-        $findings = Compare-MDOConfiguration -ReferencePath $exportFolder -DifferencePath $snapshot
-        if (-not $findings) { Write-Host '      No drift: destination matches the source export.' -ForegroundColor Green }
+        Write-Host "`n[3/3] Comparing source export against the destination tenant (parity check)..." -ForegroundColor Cyan
+        try {
+            $snapshot = Join-Path ([System.IO.Path]::GetTempPath()) "mdo-dest-$stamp"
+            Export-MDOConfiguration -Path $snapshot | Out-Null
+            # Compare-MDOConfiguration prints the full parity report (missing / extra / changed) itself.
+            $null = Compare-MDOConfiguration -ReferencePath $exportFolder -DifferencePath $snapshot
+        }
+        catch {
+            Write-Warning "Parity comparison could not be completed: $($_.Exception.Message)"
+            Write-Host "      You can run it manually: ./scripts/Compare-MDOConfig.ps1 -ExportTarget" -ForegroundColor DarkGray
+        }
     }
     else {
         Write-Host "`n[3/3] Skipping comparison (-SkipCompare)." -ForegroundColor DarkGray
