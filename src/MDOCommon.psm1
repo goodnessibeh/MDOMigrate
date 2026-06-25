@@ -141,27 +141,63 @@ function Resolve-MDOTenant {
     }
 }
 
-function Get-MDOConnectedDomain {
-    <# Returns the accepted domains of the currently connected Exchange Online tenant, or $null if not connected. #>
+$Script:MDODomainProbeError = $null
+
+function Test-MDOExchangeConnected {
+    <# True when an Exchange Online session is established (independent of org-config readiness). #>
     [CmdletBinding()]
     param()
-    try { return @((Get-AcceptedDomain -ErrorAction Stop).DomainName) }
-    catch { return $null }
+    try {
+        if (-not (Get-Command Get-ConnectionInformation -ErrorAction SilentlyContinue)) { return $false }
+        return [bool](@(Get-ConnectionInformation -ErrorAction Stop) | Where-Object { $_.State -eq 'Connected' })
+    }
+    catch { return $false }
+}
+
+function Get-MDOConnectedDomain {
+    <#
+        Returns the accepted domains of the currently connected Exchange Online tenant, or $null if not
+        connected. Get-AcceptedDomain can briefly fail right after Connect-ExchangeOnline (the session
+        is established before the org config is query-ready), so callers verifying a fresh connection
+        pass -Retries to poll until it answers instead of giving up on the first transient failure.
+    #>
+    [CmdletBinding()]
+    param([int]$Retries = 0, [int]$DelaySeconds = 2)
+
+    $Script:MDODomainProbeError = $null
+    for ($attempt = 0; $attempt -le $Retries; $attempt++) {
+        try {
+            $domains = @((Get-AcceptedDomain -ErrorAction Stop).DomainName)
+            if ($domains.Count) { return $domains }
+        }
+        catch { $Script:MDODomainProbeError = $_.Exception.Message }
+        if ($attempt -lt $Retries) { Start-Sleep -Seconds $DelaySeconds }
+    }
+    return $null
 }
 
 function Assert-MDOTenantDomain {
     <#
         Hard guard: throws unless the connected Exchange Online tenant serves $Domain. Call this right
         before any write so a misdirected session (e.g. still signed into the source tenant) can never
-        be written to. A no-op when $Domain is empty.
+        be written to. A no-op when $Domain is empty. Polls the accepted-domain list (it can lag a fresh
+        sign-in); if the session is up but the list still can't be read, it warns and skips rather than
+        falsely reporting "not connected".
     #>
     [CmdletBinding()]
     param([string]$Domain)
 
     if ([string]::IsNullOrWhiteSpace($Domain)) { return }
-    $domains = Get-MDOConnectedDomain
+    $domains = Get-MDOConnectedDomain -Retries 5
     if (-not $domains) {
-        throw "Not connected to Exchange Online; cannot verify the target tenant '$Domain'."
+        if (Test-MDOExchangeConnected) {
+            Write-Warning ("Connected to Exchange Online, but could not read the accepted-domain list to " +
+                "verify '$Domain'$(if ($Script:MDODomainProbeError) { " (last error: $Script:MDODomainProbeError)" }). " +
+                "Skipping the wrong-tenant check for this run - confirm you are signed into the right tenant.")
+            return
+        }
+        throw ("Not connected to Exchange Online; cannot verify the target tenant '$Domain'." +
+               $(if ($Script:MDODomainProbeError) { " (last error: $Script:MDODomainProbeError)" }))
     }
     if ($domains -notcontains $Domain) {
         throw "Connected tenant does NOT serve '$Domain' (accepted domains: $($domains -join ', ')). " +
@@ -359,4 +395,4 @@ function Invoke-MDOAction {
     }
 }
 
-Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOConfig, Get-MDODomainFromUpn, Resolve-MDOTenant, Get-MDOConnectedDomain, Assert-MDOTenantDomain, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction
+Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOConfig, Get-MDODomainFromUpn, Resolve-MDOTenant, Get-MDOConnectedDomain, Test-MDOExchangeConnected, Assert-MDOTenantDomain, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction

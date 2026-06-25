@@ -28,8 +28,22 @@ function Export-MDOConfiguration {
             switch ($entry.Category) {
                 'TABL' {
                     # Tenant Allow/Block List is split by ListType; tag each record so import knows which list.
+                    # Query each list type independently so one failing list never drops the others. An empty
+                    # or never-initialized list throws "Value cannot be null. Parameter name: exchangeConfigUnit"
+                    # service-side; treat that as "no items for this list" rather than a real error.
                     foreach ($listType in 'Sender', 'Url', 'FileHash') {
-                        $items = @(Get-TenantAllowBlockListItems -ListType $listType -ErrorAction Stop)
+                        try {
+                            $items = @(Get-TenantAllowBlockListItems -ListType $listType -ErrorAction Stop)
+                        }
+                        catch {
+                            if ($_.Exception.Message -match 'exchangeConfigUnit') {
+                                Write-Host "  $type/${listType}: no entries (list not initialized); skipping." -ForegroundColor DarkGray
+                            }
+                            else {
+                                Write-Warning "  Could not export $type/${listType}: $($_.Exception.Message)"
+                            }
+                            continue
+                        }
                         foreach ($item in $items) {
                             $item | Add-Member -NotePropertyName '_ListType' -NotePropertyValue $listType -Force
                             $records += $item
