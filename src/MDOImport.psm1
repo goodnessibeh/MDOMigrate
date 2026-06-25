@@ -372,7 +372,7 @@ function Confirm-MDOConfigureTabl {
         return $false
     }
 
-    $answer = Read-Host "The Tenant Allow/Block List is not provisioned in the destination tenant. Configure it now (runs Enable-OrganizationCustomization) or skip these entries? [C]onfigure / [S]kip"
+    $answer = Read-Host "The Tenant Allow/Block List requires organization customization on the destination tenant. Configure it now (runs Enable-OrganizationCustomization) or skip the Tenant Allow/Block List? [C]onfigure / [S]kip"
     $Script:MDOTablDecision = ($answer.Trim() -match '^(c|configure|y|yes)$')
     return $Script:MDOTablDecision
 }
@@ -480,6 +480,21 @@ function Import-MDOConfiguration {
             'SentToMemberOf', 'ExceptIfSentToMemberOf'
         )
         Write-Host 'Recipient scope (domains / groups) will be omitted from rules (-IgnoreRecipientScope).' -ForegroundColor Yellow
+    }
+
+    # Proactively provision the destination for the Tenant Allow/Block List before importing its entries,
+    # so propagation starts as early as possible (it can take a while). Only when entries exist in the
+    # export, the TABL types are in scope, and we're actually writing. Confirm-MDOConfigureTabl honours
+    # the -ConfigureTenantAllowBlockList mode (Always = no prompt, Ask = prompt once, Never = skip) and
+    # caches the decision so the per-entry fallback never re-asks.
+    $tablTypes   = @('TenantAllowBlockListItems', 'TenantAllowBlockListSpoofItems')
+    $tablInScope = (-not $IncludeType     -or @($IncludeType     | Where-Object { $tablTypes -contains $_ }).Count -gt 0) -and
+                   (-not $IncludeCategory -or @($IncludeCategory | Where-Object { @('TABL', 'TABLSpoof') -contains $_ }).Count -gt 0)
+    $hasTablExport = ($tablTypes | Where-Object { Test-Path -LiteralPath (Join-Path $Path "$_.json") }).Count -gt 0
+    if ($Execute -and $tablInScope -and $hasTablExport -and ($ConfigureTenantAllowBlockList -ne 'Never') -and (Confirm-MDOConfigureTabl -Mode $ConfigureTenantAllowBlockList)) {
+        Write-Host "`nProvisioning the destination tenant for the Tenant Allow/Block List..." -ForegroundColor Cyan
+        Enable-MDOOrganizationCustomization -Execute:$Execute | Out-Null
+        $Script:MDOOrgCustomizationDone = $true
     }
 
     $registry = Get-MDOTypeRegistry | Sort-Object Order
