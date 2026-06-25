@@ -28,6 +28,42 @@ function Get-MDOReadOnlyProperty {
     return $Script:MDOReadOnlyProperty
 }
 
+function Get-MDODefaultExportRoot {
+    <#
+        Returns the default location for exports: <Desktop>\MDOMigrate-Exports.
+        Uses the OS Desktop path (handles OneDrive-redirected desktops on Windows) and falls back to
+        ~/Desktop when the OS does not report one (e.g. Linux/macOS).
+    #>
+    [CmdletBinding()]
+    param()
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $HOME 'Desktop' }
+    return (Join-Path $desktop 'MDOMigrate-Exports')
+}
+
+function Resolve-MDOImportPath {
+    <#
+        Resolves which export folder to import/compare from. If $Path is given and contains a
+        manifest.json it is used as-is; otherwise the most recent timestamped sub-folder (under $Path,
+        or under the default export root when $Path is empty) that contains a manifest is selected.
+    #>
+    [CmdletBinding()]
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { $Path = Get-MDODefaultExportRoot }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Export location not found: $Path. Run Export-MDOConfig.ps1 first."
+    }
+    if (Test-Path -LiteralPath (Join-Path $Path 'manifest.json')) { return (Resolve-Path -LiteralPath $Path).Path }
+
+    $latest = Get-ChildItem -LiteralPath $Path -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'manifest.json') } |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if (-not $latest) { throw "No export (manifest.json) found under $Path. Run Export-MDOConfig.ps1 first." }
+    return $latest.FullName
+}
+
 function Get-MDOProperty {
     <# Safe property read: returns $Default when the property is absent (no StrictMode surprises). #>
     [CmdletBinding()]
@@ -204,4 +240,4 @@ function Invoke-MDOAction {
     }
 }
 
-Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDOProperty, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction
+Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction

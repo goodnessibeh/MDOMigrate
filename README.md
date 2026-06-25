@@ -64,39 +64,43 @@ cd MDOMigrate
 ./Export-MDOConfig.ps1 -UserPrincipalName admin@source.onmicrosoft.com
 ```
 
-Writes a timestamped folder, e.g. `./mdo-export/20260625-120000/`, containing one JSON file per type
-and a `manifest.json`.
+By default this writes to a timestamped folder under your Desktop, e.g.
+`<Desktop>\MDOMigrate-Exports\20260625-120000\`, containing one JSON file per type and a `manifest.json`.
+(Override with `-OutputPath` if you want a different location.)
 
 ### 2. Import into the target tenant
 
-Always dry-run first — it prints every create/update it *would* make and changes nothing:
+Always dry-run first — it prints every create/update it *would* make and changes nothing. With no
+`-Path`, it automatically uses the **most recent export** under `<Desktop>\MDOMigrate-Exports`:
 
 ```powershell
-./Import-MDOConfig.ps1 -Path ./mdo-export/20260625-120000 -UserPrincipalName admin@target.onmicrosoft.com
+./Import-MDOConfig.ps1 -UserPrincipalName admin@target.onmicrosoft.com
 ```
 
 When the plan looks right, apply it:
 
 ```powershell
-./Import-MDOConfig.ps1 -Path ./mdo-export/20260625-120000 -Execute
+./Import-MDOConfig.ps1 -Execute
 ```
+
+To import a specific older export, pass `-Path '<Desktop>\MDOMigrate-Exports\20260101-090000'`.
 
 Useful options:
 
 ```powershell
 # Limit scope by category or type
-./Import-MDOConfig.ps1 -Path <export> -IncludeCategory Policy,Rule -Execute
-./Import-MDOConfig.ps1 -Path <export> -IncludeType SafeLinksPolicy,SafeLinksRule -Execute
+./Import-MDOConfig.ps1 -IncludeCategory Policy,Rule -Execute
+./Import-MDOConfig.ps1 -IncludeType SafeLinksPolicy,SafeLinksRule -Execute
 
 # Drop recipient conditions (domains/groups) that don't exist in the target tenant, then re-scope later
-./Import-MDOConfig.ps1 -Path <export> -IgnoreRecipientScope -Execute
+./Import-MDOConfig.ps1 -IgnoreRecipientScope -Execute
 ```
 
 ### 3. Verify parity
 
 ```powershell
-# Snapshot the connected target tenant and diff it against the source export
-./Compare-MDOConfig.ps1 -ReferencePath ./mdo-export/20260625-120000 -ExportTarget -CsvPath parity.csv
+# Snapshot the connected target tenant and diff it against the latest Desktop export
+./Compare-MDOConfig.ps1 -ExportTarget -CsvPath parity.csv
 
 # Or compare two export folders directly
 ./Compare-MDOConfig.ps1 -ReferencePath ./export-source -DifferencePath ./export-target

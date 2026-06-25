@@ -9,7 +9,8 @@
     Import-MDOConfig.ps1 against the target tenant for configuration parity.
 
 .PARAMETER OutputPath
-    Base folder for the export. A timestamped sub-folder is created beneath it. Default: ./mdo-export
+    Base folder for the export. A timestamped sub-folder is created beneath it.
+    Default: <Desktop>\MDOMigrate-Exports
 
 .PARAMETER UserPrincipalName
     Optional admin UPN to pre-fill the sign-in prompt.
@@ -20,13 +21,15 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputPath = './mdo-export',
+    [string]$OutputPath,
     [string]$UserPrincipalName
 )
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src/MDOCommon.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src/MDOExport.psm1') -Force
+
+if (-not $OutputPath) { $OutputPath = Get-MDODefaultExportRoot }
 
 Connect-MDOTenant -UserPrincipalName $UserPrincipalName
 

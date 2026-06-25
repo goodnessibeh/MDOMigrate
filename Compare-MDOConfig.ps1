@@ -24,12 +24,12 @@
     Optional path to also write the drift report as CSV.
 
 .EXAMPLE
-    ./Compare-MDOConfig.ps1 -ReferencePath ./mdo-export/source -DifferencePath ./mdo-export/target
-    ./Compare-MDOConfig.ps1 -ReferencePath ./mdo-export/source -ExportTarget -CsvPath parity.csv
+    ./Compare-MDOConfig.ps1 -ExportTarget -CsvPath parity.csv     # latest Desktop export vs live target
+    ./Compare-MDOConfig.ps1 -ReferencePath C:\backups\source -DifferencePath C:\backups\target
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$ReferencePath,
+    [string]$ReferencePath,
     [string]$DifferencePath,
     [switch]$ExportTarget,
     [string[]]$IncludeType,
@@ -41,6 +41,10 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src/MDOCommon.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src/MDOExport.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src/MDOCompare.psm1') -Force
+
+# Default the reference (source) to the most recent export on the Desktop.
+$ReferencePath = Resolve-MDOImportPath -Path $ReferencePath
+Write-Host "Reference (source): $ReferencePath" -ForegroundColor Cyan
 
 if (-not $DifferencePath) {
     if (-not $ExportTarget) {

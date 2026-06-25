@@ -8,7 +8,9 @@
     connected tenant. Runs as a DRY RUN by default (prints what it would do); add -Execute to apply.
 
 .PARAMETER Path
-    The timestamped export folder produced by Export-MDOConfig.ps1.
+    The export folder produced by Export-MDOConfig.ps1. If omitted, the most recent export under
+    <Desktop>\MDOMigrate-Exports is used automatically. You may also pass the export root, in which
+    case the latest timestamped export beneath it is selected.
 
 .PARAMETER Execute
     Actually write changes to the tenant. Omit for a safe dry run.
@@ -28,14 +30,15 @@
     Optional admin UPN to pre-fill the sign-in prompt.
 
 .EXAMPLE
-    ./Import-MDOConfig.ps1 -Path ./mdo-export/20260625-120000                 # dry run, everything
-    ./Import-MDOConfig.ps1 -Path ./mdo-export/20260625-120000 -Execute        # apply everything
-    ./Import-MDOConfig.ps1 -Path ./mdo-export/20260625-120000 -IncludeCategory Policy,Rule -Execute
-    ./Import-MDOConfig.ps1 -Path ./mdo-export/20260625-120000 -IgnoreRecipientScope -Execute
+    ./Import-MDOConfig.ps1                          # dry run, latest export on Desktop
+    ./Import-MDOConfig.ps1 -Execute                 # apply latest export
+    ./Import-MDOConfig.ps1 -IncludeCategory Policy,Rule -Execute
+    ./Import-MDOConfig.ps1 -IgnoreRecipientScope -Execute
+    ./Import-MDOConfig.ps1 -Path 'C:\backups\20260625-120000' -Execute   # explicit export folder
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$Path,
+    [string]$Path,
     [switch]$Execute,
     [string[]]$IncludeCategory,
     [string[]]$IncludeType,
@@ -46,6 +49,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src/MDOCommon.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src/MDOImport.psm1') -Force
+
+$Path = Resolve-MDOImportPath -Path $Path
+Write-Host "Importing from: $Path" -ForegroundColor Cyan
 
 Connect-MDOTenant -UserPrincipalName $UserPrincipalName
 
