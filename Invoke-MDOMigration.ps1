@@ -52,8 +52,9 @@
 .PARAMETER ExportPath
     Import from this specific export folder instead of exporting fresh (implies -SkipExport).
 
-.PARAMETER Compare
-    After the import, re-snapshot the destination tenant and print a source-vs-destination drift report.
+.PARAMETER SkipCompare
+    Skip the parity comparison. By default, after the import the destination tenant is re-snapshotted and
+    a source-vs-destination drift report is printed on completion.
 
 .PARAMETER IncludeCategory / IncludeType / IgnoreRecipientScope
     Passed through to the import step (see Import-MDOConfig.ps1).
@@ -61,6 +62,10 @@
 .PARAMETER CreateMissingGroups
     When a rule targets a distribution group absent in the destination: Ask (default, prompt per group),
     Always (create empty groups without asking), or Never (drop the missing group from the rule).
+
+.PARAMETER ConfigureTenantAllowBlockList
+    When the destination tenant is not provisioned for the Tenant Allow/Block List: Ask (default, prompt
+    to configure or skip), Always (run Enable-OrganizationCustomization), or Never (skip the entries).
 
 .PARAMETER Force
     Skip the "about to write to <destination>" confirmation prompt in -Live mode.
@@ -72,7 +77,8 @@
     ./Invoke-MDOMigration.ps1                       # full pipeline, dry run (simulate)
     ./Invoke-MDOMigration.ps1 -Live                 # full pipeline, apply to destination
     ./Invoke-MDOMigration.ps1 -SkipExport -Live     # re-import latest export, apply
-    ./Invoke-MDOMigration.ps1 -Live -Compare        # apply, then report remaining drift
+    ./Invoke-MDOMigration.ps1 -Live                 # apply, then report remaining drift (compare runs by default)
+    ./Invoke-MDOMigration.ps1 -Live -SkipCompare    # apply without the parity comparison
 #>
 [CmdletBinding()]
 param(
@@ -86,11 +92,12 @@ param(
     [string]$OutputPath,
     [switch]$SkipExport,
     [string]$ExportPath,
-    [switch]$Compare,
+    [switch]$SkipCompare,
     [string[]]$IncludeCategory,
     [string[]]$IncludeType,
     [switch]$IgnoreRecipientScope,
     [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
+    [ValidateSet('Ask', 'Always', 'Never')][string]$ConfigureTenantAllowBlockList = 'Ask',
     [switch]$Force,
     [string]$LogPath
 )
@@ -180,13 +187,13 @@ try {
     }
 
     Write-Host "`n      Importing into DESTINATION ($mode)..." -ForegroundColor Cyan
-    $importParams = @{ Path = $exportFolder; Execute = $execute; IgnoreRecipientScope = $IgnoreRecipientScope; CreateMissingGroups = $CreateMissingGroups }
+    $importParams = @{ Path = $exportFolder; Execute = $execute; IgnoreRecipientScope = $IgnoreRecipientScope; CreateMissingGroups = $CreateMissingGroups; ConfigureTenantAllowBlockList = $ConfigureTenantAllowBlockList }
     if ($IncludeCategory) { $importParams['IncludeCategory'] = $IncludeCategory }
     if ($IncludeType)     { $importParams['IncludeType']     = $IncludeType }
     $importResults = Import-MDOConfiguration @importParams
 
-    # ---- Step 3: optional parity comparison --------------------------------------------------------
-    if ($Compare) {
+    # ---- Step 3: parity comparison (runs on completion unless -SkipCompare) -------------------------
+    if (-not $SkipCompare) {
         Write-Host "`n[3/3] Comparing source export against the destination tenant..." -ForegroundColor Cyan
         $snapshot = Join-Path ([System.IO.Path]::GetTempPath()) "mdo-dest-$stamp"
         Export-MDOConfiguration -Path $snapshot | Out-Null
@@ -194,7 +201,7 @@ try {
         if (-not $findings) { Write-Host '      No drift: destination matches the source export.' -ForegroundColor Green }
     }
     else {
-        Write-Host "`n[3/3] Skipping comparison (pass -Compare to run a parity check)." -ForegroundColor DarkGray
+        Write-Host "`n[3/3] Skipping comparison (-SkipCompare)." -ForegroundColor DarkGray
     }
 
     # ---- Final summary -----------------------------------------------------------------------------

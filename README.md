@@ -148,19 +148,22 @@ under `<export base>\logs`.
 ./Invoke-MDOMigration.ps1
 
 # Apply it to the destination tenant (asks for a 'yes' confirmation before writing).
+# On completion it re-snapshots the destination and prints a source-vs-destination drift report.
 ./Invoke-MDOMigration.ps1 -Live
 
-# Apply, then run a parity check between the source export and the destination.
-./Invoke-MDOMigration.ps1 -Live -Compare
+# Apply without the parity comparison.
+./Invoke-MDOMigration.ps1 -Live -SkipCompare
 
 # Re-import the most recent export without re-exporting the source.
 ./Invoke-MDOMigration.ps1 -SkipExport -Live
 ```
 
 You authenticate to the **source** tenant for the export, then to the **destination** tenant for the
-import, one after another in the same window. Useful switches: `-IncludeCategory` / `-IncludeType` /
-`-IgnoreRecipientScope` (passed through to the import), `-OutputPath` (export location), `-ExportPath`
-(import a specific older export), `-Force` (skip the write confirmation), `-LogPath`.
+import, one after another in the same window. The parity comparison runs on completion by default
+(`-SkipCompare` to skip). Useful switches: `-CreateMissingGroups` and `-ConfigureTenantAllowBlockList`
+(`Ask`/`Always`/`Never`), `-IncludeCategory` / `-IncludeType` / `-IgnoreRecipientScope` (passed through
+to the import), `-OutputPath` (export location), `-ExportPath` (import a specific older export),
+`-Force` (skip the write confirmation), `-LogPath`.
 
 ### Or run each step yourself
 
@@ -257,6 +260,11 @@ with cmdlet help text). This is for review/audit, not for re-import.
   **no members** - add members afterwards.
 - **Built-in quarantine policies** (`DefaultFullAccessPolicy`, etc.) are intentionally skipped - they
   already exist identically in every tenant.
+- **Tenant Allow/Block List not provisioned** in the destination makes every entry fail with
+  `exchangeConfigUnit`. `-ConfigureTenantAllowBlockList` controls this: `Ask` (default) prompts to
+  configure it (runs `Enable-OrganizationCustomization`) or skip; `Always` configures without asking;
+  `Never` skips. Provisioning can take time to propagate, so a re-run may be needed for the entries to
+  apply. The tool stops after the first such failure rather than repeating it for every entry.
 - **Tenant Allow/Block "allow" entries** may require a service-enforced expiration window; such items
   surface as reported failures rather than being silently dropped.
 - **Preset security policy rules** can require the preset to be enabled in the portal first; those

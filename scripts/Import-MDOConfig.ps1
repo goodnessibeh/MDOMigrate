@@ -42,6 +42,11 @@
     destination tenant: Ask (default, prompt to create an empty group per missing group), Always (create
     without asking), or Never (skip - the missing group is dropped from the rule).
 
+.PARAMETER ConfigureTenantAllowBlockList
+    What to do when the destination tenant is not provisioned for the Tenant Allow/Block List (entries
+    fail with 'exchangeConfigUnit'): Ask (default, prompt to configure or skip), Always (run
+    Enable-OrganizationCustomization without asking), or Never (skip the entries).
+
 .EXAMPLE
     ./scripts/Import-MDOConfig.ps1                          # dry run, latest export on Desktop
     ./scripts/Import-MDOConfig.ps1 -Execute                 # apply latest export
@@ -58,6 +63,7 @@ param(
     [string[]]$IncludeType,
     [switch]$IgnoreRecipientScope,
     [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
+    [ValidateSet('Ask', 'Always', 'Never')][string]$ConfigureTenantAllowBlockList = 'Ask',
     [string]$Domain,
     [string]$UserPrincipalName,
     [string]$ConfigPath
@@ -77,7 +83,7 @@ Connect-MDOTenant -UserPrincipalName $dest.UserPrincipalName -TenantDomain $dest
 # Final hard guard right before writing: never apply to the wrong tenant.
 if ($Execute) { Assert-MDOTenantDomain -Domain $dest.Domain }
 
-$importParams = @{ Path = $Path; Execute = $Execute; IgnoreRecipientScope = $IgnoreRecipientScope; CreateMissingGroups = $CreateMissingGroups }
+$importParams = @{ Path = $Path; Execute = $Execute; IgnoreRecipientScope = $IgnoreRecipientScope; CreateMissingGroups = $CreateMissingGroups; ConfigureTenantAllowBlockList = $ConfigureTenantAllowBlockList }
 if ($IncludeCategory) { $importParams['IncludeCategory'] = $IncludeCategory }
 if ($IncludeType)     { $importParams['IncludeType']     = $IncludeType }
 

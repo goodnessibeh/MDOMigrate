@@ -86,7 +86,10 @@ function Initialize-MDOPlaceholderGroup {
     if ($alias.Length -gt 60) { $alias = $alias.Substring(0, 60) }
     if (-not $alias) { $alias = 'mdoGroup' }
 
-    $params = @{ Name = $Identity; Alias = $alias; Type = 'Distribution' }
+    # New-DistributionGroup creates a mail-enabled universal distribution group by default (Exchange
+    # Online does not accept a -Type parameter here). Keep the original SMTP only if its domain is
+    # accepted in the target; otherwise let Exchange assign one.
+    $params = @{ Name = $Identity; Alias = $alias }
     if ($Identity -match '@') {
         $domain = ($Identity -split '@', 2)[1]
         if ((Get-MDOConnectedDomain) -contains $domain) { $params['PrimarySmtpAddress'] = $Identity }
@@ -340,6 +343,63 @@ function Import-MDOTablSpoofObject {
     return Invoke-MDOAction -Cmdlet 'New-TenantAllowBlockListSpoofItems' -Parameters $splat -Description "spoof $action '$spoofedUser'" -Execute:$Execute
 }
 
+# Per-run state for provisioning the Tenant Allow/Block List. Reset by Import-MDOConfiguration.
+$Script:MDOTablDecision        = $null    # $true = configure, $false = skip, $null = ask
+$Script:MDOOrgCustomizationDone = $false   # Enable-OrganizationCustomization already attempted this run
+
+function Confirm-MDOConfigureTabl {
+    <#
+        Decides whether to provision the tenant for the Tenant Allow/Block List when it is missing.
+        'Always'/'Never' answer without asking; 'Ask' prompts once (Configure/Skip). Non-interactive
+        hosts default to skipping.
+    #>
+    [CmdletBinding()]
+    param([ValidateSet('Ask', 'Always', 'Never')][string]$Mode = 'Ask')
+
+    if ($Mode -eq 'Always') { return $true }
+    if ($Mode -eq 'Never')  { return $false }
+    if ($null -ne $Script:MDOTablDecision) { return $Script:MDOTablDecision }
+
+    $interactive = $true
+    try { $interactive = -not [System.Console]::IsInputRedirected } catch { $interactive = $false }
+    if (-not $interactive) {
+        Write-Host "  Tenant Allow/Block List is not provisioned and input is non-interactive; skipping (use -ConfigureTenantAllowBlockList Always to provision)." -ForegroundColor DarkGray
+        $Script:MDOTablDecision = $false
+        return $false
+    }
+
+    $answer = Read-Host "The Tenant Allow/Block List is not provisioned in the destination tenant. Configure it now (runs Enable-OrganizationCustomization) or skip these entries? [C]onfigure / [S]kip"
+    $Script:MDOTablDecision = ($answer.Trim() -match '^(c|configure|y|yes)$')
+    return $Script:MDOTablDecision
+}
+
+function Enable-MDOOrganizationCustomization {
+    <#
+        Provisions the tenant's organization customization, which the Tenant Allow/Block List requires.
+        Treats an already-enabled tenant as success. Returns $true when provisioning is in place/started.
+    #>
+    [CmdletBinding()]
+    param([switch]$Execute)
+
+    if (-not $Execute) {
+        Write-Host "  [DRYRUN] Enable-OrganizationCustomization  (provision tenant for Tenant Allow/Block List)" -ForegroundColor Yellow
+        return $true
+    }
+    try {
+        Enable-OrganizationCustomization -ErrorAction Stop
+        Write-Host "  [OK]     Enable-OrganizationCustomization  - provisioning started (can take time to fully propagate)" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        if ($_.Exception.Message -match 'already enabled|not required|already been enabled') {
+            Write-Host "  Organization customization is already enabled." -ForegroundColor DarkGray
+            return $true
+        }
+        Write-Host "  [FAIL]   Enable-OrganizationCustomization: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
 function Write-MDOImportSummary {
     [CmdletBinding()]
     param([array]$Results)
@@ -383,13 +443,16 @@ function Import-MDOConfiguration {
         [string[]]$IncludeCategory,
         [string[]]$IncludeType,
         [switch]$IgnoreRecipientScope,
-        [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask'
+        [ValidateSet('Ask', 'Always', 'Never')][string]$CreateMissingGroups = 'Ask',
+        [ValidateSet('Ask', 'Always', 'Never')][string]$ConfigureTenantAllowBlockList = 'Ask'
     )
 
     if (-not (Test-Path -LiteralPath $Path)) { throw "Export folder not found: $Path" }
-    # Reset per-run consent state for auto-creating missing groups.
-    $Script:MDOGroupDecision  = @{}
-    $Script:MDOGroupCreateAll = $null
+    # Reset per-run consent state for auto-creating missing groups and provisioning the TABL.
+    $Script:MDOGroupDecision       = @{}
+    $Script:MDOGroupCreateAll      = $null
+    $Script:MDOTablDecision        = $null
+    $Script:MDOOrgCustomizationDone = $false
 
     if (-not $Execute) {
         Write-Host '=== DRY RUN: no changes will be made. Re-run with -Execute to apply. ===' -ForegroundColor Yellow
@@ -425,15 +488,42 @@ function Import-MDOConfiguration {
         if ($objects.Count -eq 0) { continue }
         Write-Host "`n--- $type ($($objects.Count)) ---" -ForegroundColor Cyan
 
+        $index = 0
         foreach ($obj in $objects) {
-            switch ($entry.Category) {
-                'Policy'     { $results += Import-MDOPolicyObject     -Type $type -Object $obj -Execute:$Execute }
-                'Rule'       { $results += Import-MDORuleObject       -Type $type -Object $obj -ExcludeParam $ruleExclude -CreateMissingGroups $CreateMissingGroups -Execute:$Execute }
-                'Quarantine' { $results += Import-MDOQuarantineObject -Object $obj -Execute:$Execute }
-                'Singleton'  { $results += Import-MDOSingletonObject  -Entry $entry -Object $obj -Execute:$Execute }
-                'PresetRule' { $results += Import-MDOPresetRuleObject -Type $type -Object $obj -ExcludeParam $ruleExclude -Execute:$Execute }
-                'TABL'       { $results += Import-MDOTablObject       -Object $obj -Execute:$Execute }
-                'TABLSpoof'  { $results += Import-MDOTablSpoofObject  -Object $obj -Execute:$Execute }
+            $index++
+            $itemResult = switch ($entry.Category) {
+                'Policy'     { Import-MDOPolicyObject     -Type $type -Object $obj -Execute:$Execute }
+                'Rule'       { Import-MDORuleObject       -Type $type -Object $obj -ExcludeParam $ruleExclude -CreateMissingGroups $CreateMissingGroups -Execute:$Execute }
+                'Quarantine' { Import-MDOQuarantineObject -Object $obj -Execute:$Execute }
+                'Singleton'  { Import-MDOSingletonObject  -Entry $entry -Object $obj -Execute:$Execute }
+                'PresetRule' { Import-MDOPresetRuleObject -Type $type -Object $obj -ExcludeParam $ruleExclude -Execute:$Execute }
+                'TABL'       { Import-MDOTablObject       -Object $obj -Execute:$Execute }
+                'TABLSpoof'  { Import-MDOTablSpoofObject  -Object $obj -Execute:$Execute }
+            }
+            $results += $itemResult
+
+            # The Tenant Allow/Block List throws "Value cannot be null. Parameter name: exchangeConfigUnit"
+            # on EVERY entry when the tenant isn't provisioned for it. On the first such failure, offer to
+            # configure the tenant (Enable-OrganizationCustomization) and retry; otherwise skip the rest
+            # instead of repeating the same failure for thousands of entries.
+            if ($entry.Category -in @('TABL', 'TABLSpoof') -and $itemResult -and -not $itemResult.Success -and ($itemResult.Error -match 'exchangeConfigUnit')) {
+                $retried = $false
+                if (-not $Script:MDOOrgCustomizationDone -and (Confirm-MDOConfigureTabl -Mode $ConfigureTenantAllowBlockList)) {
+                    $provisioned = Enable-MDOOrganizationCustomization -Execute:$Execute
+                    $Script:MDOOrgCustomizationDone = $true
+                    if ($provisioned) {
+                        $retry = if ($entry.Category -eq 'TABL') { Import-MDOTablObject -Object $obj -Execute:$Execute } else { Import-MDOTablSpoofObject -Object $obj -Execute:$Execute }
+                        $results += $retry
+                        if ($retry.Success) { $retried = $true }
+                    }
+                }
+                if (-not $retried) {
+                    Write-Host ("  [SKIP]   Tenant Allow/Block List unavailable; skipping the remaining {0} {1} entr(y/ies)." -f ($objects.Count - $index), $type) -ForegroundColor Yellow
+                    if ($Script:MDOOrgCustomizationDone) {
+                        Write-Host "           Provisioning was started but can take time to propagate - re-run later with -IncludeType $type." -ForegroundColor DarkGray
+                    }
+                    break
+                }
             }
         }
     }
