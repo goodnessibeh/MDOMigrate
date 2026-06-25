@@ -77,7 +77,20 @@ function Write-MDOCompareSummary {
         Write-Host "`n FULL PARITY: reference and target match (identity/UUID fields ignored)." -ForegroundColor Green
         return
     }
-    Write-Host "`n Details:" -ForegroundColor Cyan
+
+    # Per-type breakdown table so the report is comprehensive at a glance before the line-by-line detail.
+    Write-Host "`n By type:" -ForegroundColor Cyan
+    $Findings | Group-Object Type | Sort-Object Name | ForEach-Object {
+        [pscustomobject]@{
+            Type    = $_.Name
+            Missing = @($_.Group | Where-Object { $_.Status -eq 'MissingInTarget' }).Count
+            Extra   = @($_.Group | Where-Object { $_.Status -eq 'ExtraInTarget' }).Count
+            Changed = @($_.Group | Where-Object { $_.Status -eq 'Changed' }).Count
+            Total   = $_.Count
+        }
+    } | Format-Table -AutoSize | Out-Host
+
+    Write-Host " Details:" -ForegroundColor Cyan
     $Findings | Sort-Object Type, Object, Property |
         Format-Table Type, Object, Status, Property, Reference, Difference -AutoSize -Wrap | Out-Host
 }

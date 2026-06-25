@@ -194,17 +194,27 @@ try {
 
     # ---- Step 3: parity comparison (runs on completion, right after the import summary) -------------
     # Wrapped so a snapshot/compare hiccup can never swallow the run or hide the import results.
+    $parityReport = $null
     if (-not $SkipCompare) {
-        Write-Host "`n[3/3] Comparing source export against the destination tenant (parity check)..." -ForegroundColor Cyan
+        Write-Host "`n[3/3] Parity check - snapshotting the destination and comparing it to the source export..." -ForegroundColor Cyan
         try {
             $snapshot = Join-Path ([System.IO.Path]::GetTempPath()) "mdo-dest-$stamp"
+            Write-Host "      Snapshotting destination tenant..." -ForegroundColor DarkGray
             Export-MDOConfiguration -Path $snapshot | Out-Null
-            # Compare-MDOConfiguration prints the full parity report (missing / extra / changed) itself.
-            $null = Compare-MDOConfiguration -ReferencePath $exportFolder -DifferencePath $snapshot
+            # Compare-MDOConfiguration prints the full per-type parity report; capture findings to save too.
+            $findings = @(Compare-MDOConfiguration -ReferencePath $exportFolder -DifferencePath $snapshot)
+            if ($findings.Count) {
+                $parityReport = Join-Path (Split-Path -Parent $LogPath) "parity-$stamp.csv"
+                $findings | Export-Csv -Path $parityReport -NoTypeInformation -Encoding utf8
+                Write-Host ("`n Full parity report ({0} drift item(s)) saved to: {1}" -f $findings.Count, $parityReport) -ForegroundColor Cyan
+            }
+            else {
+                Write-Host "`n Full parity: the destination matches the source export." -ForegroundColor Green
+            }
         }
         catch {
             Write-Warning "Parity comparison could not be completed: $($_.Exception.Message)"
-            Write-Host "      You can run it manually: ./scripts/Compare-MDOConfig.ps1 -ExportTarget" -ForegroundColor DarkGray
+            Write-Host "      Run it manually later: ./scripts/Compare-MDOConfig.ps1 -ExportTarget -CsvPath parity.csv" -ForegroundColor DarkGray
         }
     }
     else {
@@ -221,9 +231,17 @@ try {
     Write-Host " Planned : $planned (dry-run)"
     Write-Host " Failed  : $failed"
     Write-Host " Log     : $LogPath"
+    if ($parityReport) { Write-Host " Parity  : $parityReport" }
     if (-not $execute) {
         Write-Host "`nThis was a simulation. Re-run with -Live to apply." -ForegroundColor Yellow
     }
+}
+catch {
+    # Surface why a run ended early instead of dying silently with no parity report.
+    Write-Host "`n================ MIGRATION ABORTED ================" -ForegroundColor Red
+    Write-Host " $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host " Log: $LogPath" -ForegroundColor DarkGray
+    throw
 }
 finally {
     Stop-Transcript | Out-Null
