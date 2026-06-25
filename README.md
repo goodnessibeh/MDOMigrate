@@ -101,6 +101,19 @@ git clone https://github.com/goodnessibeh/MDOMigrate.git
 cd MDOMigrate
 ```
 
+On Windows, allow local scripts to run (one-time, current user only). Run this in PowerShell 7:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+`RemoteSigned` lets your local scripts run while still requiring downloaded scripts to be signed. To
+allow scripts for the current session only (no persistent change), use instead:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+```
+
 ## Configure
 
 All config lives in `config/`. Copy the example and fill in the admin UPN for each tenant.
