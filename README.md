@@ -135,6 +135,31 @@ cp config/tenants.example.json config/tenants.json
   empty and you'll be prompted for it in the terminal** at run time.
 - (Optional) You can still add a `"Domain"` to a tenant entry to override the derived value.
 
+## Before you run: enable organization customization on the destination
+
+The **Tenant Allow/Block List** requires the destination tenant to have *organization customization*
+enabled. Without it, every allow/block entry fails with
+`Value cannot be null. Parameter name: exchangeConfigUnit`. Enable it once, **before** running the
+orchestrator (this is an Exchange Online cmdlet - connect to Exchange Online, not Security & Compliance):
+
+```powershell
+Connect-ExchangeOnline -UserPrincipalName admin@destination.onmicrosoft.com
+Enable-OrganizationCustomization
+```
+
+- `This operation is not required. Organization is already enabled` - already done, nothing to do.
+- `not recognized as a cmdlet` - update the module and reconnect: `Update-Module ExchangeOnlineManagement`,
+  then `Connect-ExchangeOnline` again.
+- **Portal alternative** (most reliable): in the Microsoft Defender portal open *Email & collaboration >
+  Policies & rules > Threat policies > Tenant Allow/Block Lists* and add any one entry. That first
+  interaction provisions the list.
+
+Provisioning can take from a few minutes up to a couple of hours to propagate. If you skip this step,
+the orchestrator can still offer to run `Enable-OrganizationCustomization` for you
+(`-ConfigureTenantAllowBlockList Ask|Always`), but doing it ahead of time avoids a wasted run, since the
+rest of the migration completes while the Tenant Allow/Block List is still propagating. Re-run later with
+`-IncludeType TenantAllowBlockListItems,TenantAllowBlockListSpoofItems` to apply just those entries.
+
 ## Usage
 
 ### Quick start - the whole pipeline in one command
