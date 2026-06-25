@@ -81,28 +81,42 @@ function Get-MDOProperty {
 function Get-MDOConfig {
     <#
         Loads the tenant config file (tenants.json) that names the Source and Destination tenants.
-        Default location is tenants.json in the repository root (the parent of this src/ folder).
-        Returns the parsed object, or $null when no config file exists. Shape:
+        Default location is config/tenants.json in the repository root. Returns the parsed object, or
+        $null when no config file exists. Only the admin UPN is needed per tenant (the domain is derived
+        from it); a Domain may still be supplied to override. Shape:
 
-            { "Source":      { "Domain": "source.onmicrosoft.com",      "UserPrincipalName": "admin@source.com" },
-              "Destination": { "Domain": "destination.onmicrosoft.com", "UserPrincipalName": "admin@dest.com"  } }
+            { "Source":      { "UserPrincipalName": "admin@source.onmicrosoft.com" },
+              "Destination": { "UserPrincipalName": "admin@destination.onmicrosoft.com" } }
     #>
     [CmdletBinding()]
     param([string]$ConfigPath)
 
     if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-        $ConfigPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'tenants.json'
+        $ConfigPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config/tenants.json'
     }
     if (-not (Test-Path -LiteralPath $ConfigPath)) { return $null }
     try { return (Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json) }
     catch { throw "Failed to read tenant config '$ConfigPath': $($_.Exception.Message)" }
 }
 
+function Get-MDODomainFromUpn {
+    <#
+        Derives a tenant domain from an admin UPN: the part after '@'. A UPN like
+        admin@contoso.onmicrosoft.com can only sign in if that domain is verified in the tenant, so the
+        derived domain is a valid value for the wrong-tenant guard. Returns $null for an empty/invalid UPN.
+    #>
+    [CmdletBinding()]
+    param([string]$UserPrincipalName)
+    if ([string]::IsNullOrWhiteSpace($UserPrincipalName) -or $UserPrincipalName -notmatch '@') { return $null }
+    return ($UserPrincipalName -split '@', 2)[1].Trim()
+}
+
 function Resolve-MDOTenant {
     <#
-        Resolves the Domain + UserPrincipalName for one tenant role ('Source' or 'Destination').
-        Explicit parameters win over the config file, which wins over nothing. Either may be absent:
-        Domain enables the wrong-tenant guard; UPN just pre-fills the sign-in prompt.
+        Resolves the UserPrincipalName (and the domain to guard on) for one tenant role
+        ('Source' or 'Destination'). The UPN is the only thing you need to provide; the domain is
+        auto-derived from it (the part after '@'). Precedence for both: explicit parameter, then the
+        config file. A Domain in the config (legacy/optional) still overrides the derived one.
     #>
     [CmdletBinding()]
     param(
@@ -116,8 +130,9 @@ function Resolve-MDOTenant {
     $config = Get-MDOConfig -ConfigPath $ConfigPath
     if ($config) { $entry = Get-MDOProperty $config $Role }
 
-    if ([string]::IsNullOrWhiteSpace($Domain)            -and $entry) { $Domain            = Get-MDOProperty $entry 'Domain' }
     if ([string]::IsNullOrWhiteSpace($UserPrincipalName) -and $entry) { $UserPrincipalName = Get-MDOProperty $entry 'UserPrincipalName' }
+    if ([string]::IsNullOrWhiteSpace($Domain)            -and $entry) { $Domain            = Get-MDOProperty $entry 'Domain' }
+    if ([string]::IsNullOrWhiteSpace($Domain)) { $Domain = Get-MDODomainFromUpn $UserPrincipalName }
 
     return [pscustomobject]@{
         Role              = $Role
@@ -344,4 +359,4 @@ function Invoke-MDOAction {
     }
 }
 
-Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOConfig, Resolve-MDOTenant, Get-MDOConnectedDomain, Assert-MDOTenantDomain, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction
+Export-ModuleMember -Function Get-MDOReadOnlyProperty, Get-MDODefaultExportRoot, Resolve-MDOImportPath, Get-MDOProperty, Get-MDOConfig, Get-MDODomainFromUpn, Resolve-MDOTenant, Get-MDOConnectedDomain, Assert-MDOTenantDomain, Get-MDOTypeRegistry, Connect-MDOTenant, ConvertTo-MDOSplat, Invoke-MDOAction

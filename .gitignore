@@ -4,9 +4,10 @@ mdo-export/
 *.xlsx
 *.csv
 
-# Real tenant config holds domains/UPNs; keep it local. The example is committed.
-tenants.json
-!tenants.example.json
+# Tenant config templates ship with empty UPNs and ARE tracked. Fill them in locally; to keep your
+# real UPNs out of git, run: git update-index --skip-worktree config/tenants.json
+!config/tenants.json
+!config/tenants.example.json
 
 # Orchestrator run logs
 logs/

@@ -27,12 +27,12 @@
     lets rules import cleanly, after which you re-scope them to the target's domains/groups.
 
 .PARAMETER Domain
-    The DESTINATION (target) tenant's domain (e.g. destination.onmicrosoft.com). The session is
-    verified to serve this domain before anything is written, so a session still signed into the
-    source tenant can never be written to. Defaults to the Destination.Domain in tenants.json.
+    Optional override for the DESTINATION (target) tenant's domain. The session is verified to serve
+    this domain before anything is written, so a session still signed into the source tenant can never
+    be written to. By default it is derived from the UPN (the part after '@').
 
 .PARAMETER UserPrincipalName
-    Admin UPN to pre-fill the sign-in prompt. Defaults to the Destination.UserPrincipalName in tenants.json.
+    Admin UPN to sign in / pre-fill the prompt. Defaults to the Destination.UserPrincipalName in tenants.json.
 
 .PARAMETER ConfigPath
     Path to the tenant config file. Defaults to tenants.json in the repository root.

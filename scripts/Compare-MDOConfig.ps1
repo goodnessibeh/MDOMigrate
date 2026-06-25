@@ -24,8 +24,8 @@
     Optional path to also write the drift report as CSV.
 
 .PARAMETER Domain
-    The DESTINATION (target) tenant's domain, used to verify the session before snapshotting with
-    -ExportTarget. Defaults to the Destination.Domain in tenants.json.
+    Optional override for the DESTINATION (target) tenant's domain, used to verify the session before
+    snapshotting with -ExportTarget. By default it is derived from the UPN (the part after '@').
 
 .PARAMETER ConfigPath
     Path to the tenant config file. Defaults to tenants.json in the repository root.

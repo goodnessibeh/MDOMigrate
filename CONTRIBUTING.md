@@ -52,7 +52,7 @@ Keep entry scripts thin; put logic in the `src/*.psm1` modules.
 
 - **PowerShell 7+**, approved verbs, `[CmdletBinding()]` on functions, singular nouns.
 - Keep each file focused and reasonably small; split modules rather than growing one large file.
-- Use the call operator (`& "Get-$type"`) and splatting — **never** `Invoke-Expression`.
+- Use the call operator (`& "Get-$type"`) and splatting - **never** `Invoke-Expression`.
 - Destructive actions must honor the dry-run model: do nothing unless `-Execute` is passed.
 - Never replay tenant-specific identity/UUID/timestamp values into another tenant.
 
@@ -60,7 +60,7 @@ Keep entry scripts thin; put logic in the `src/*.psm1` modules.
 
 1. **Lint must be clean** (0 errors, 0 warnings):
    ```powershell
-   Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+   Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./config/PSScriptAnalyzerSettings.psd1
    ```
 2. **Syntax must parse** for every script:
    ```powershell

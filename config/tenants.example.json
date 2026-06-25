@@ -1,0 +1,4 @@
+{
+  "Source":      { "UserPrincipalName": "admin@source.onmicrosoft.com" },
+  "Destination": { "UserPrincipalName": "admin@destination.onmicrosoft.com" }
+}

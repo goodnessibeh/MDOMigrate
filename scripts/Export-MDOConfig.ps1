@@ -13,11 +13,11 @@
     Default: <Desktop>\MDOMigrate-Exports
 
 .PARAMETER Domain
-    The SOURCE tenant's domain (e.g. source.onmicrosoft.com). Used to verify the session is signed
-    into the right tenant before exporting. Defaults to the Source.Domain in tenants.json.
+    Optional override for the SOURCE tenant's domain (used to verify the right tenant before exporting).
+    By default it is derived from the UPN (the part after '@').
 
 .PARAMETER UserPrincipalName
-    Admin UPN to pre-fill the sign-in prompt. Defaults to the Source.UserPrincipalName in tenants.json.
+    Admin UPN to sign in / pre-fill the prompt. Defaults to the Source.UserPrincipalName in tenants.json.
 
 .PARAMETER ConfigPath
     Path to the tenant config file. Defaults to tenants.json in the repository root.

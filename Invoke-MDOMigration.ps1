@@ -24,9 +24,10 @@
 
 .PARAMETER ConfigPath
     Path to the tenant config file. Default: tenants.json in this folder. Copy tenants.example.json to
-    tenants.json and fill it in. Shape:
-        { "Source":      { "Domain": "...", "UserPrincipalName": "..." },
-          "Destination": { "Domain": "...", "UserPrincipalName": "..." } }
+    tenants.json and fill it in. Only the admin UPN is needed per tenant; the domain used by the
+    wrong-tenant guard is derived from the UPN. Shape:
+        { "Source":      { "UserPrincipalName": "admin@source.onmicrosoft.com" },
+          "Destination": { "UserPrincipalName": "admin@destination.onmicrosoft.com" } }
 
 .PARAMETER Live
     Actually write changes to the destination tenant. Omit (or pass -DryRun) for a safe simulation.
@@ -114,20 +115,17 @@ function Read-MDOTenantField {
     }
 }
 
-# ---- Resolve both tenants from config, prompting for anything still missing -------------------------
+# ---- Resolve both tenants from config, prompting for any missing UPN --------------------------------
+# Only the admin UPN is needed; the tenant domain (used by the wrong-tenant guard) is derived from it.
 $source = Resolve-MDOTenant -Role Source      -ConfigPath $ConfigPath -Domain $SourceDomain      -UserPrincipalName $SourceUserPrincipalName
 $dest   = Resolve-MDOTenant -Role Destination -ConfigPath $ConfigPath -Domain $DestinationDomain -UserPrincipalName $DestinationUserPrincipalName
 
 if (-not $SkipExport) {
-    $source.Domain            = Read-MDOTenantField $source.Domain            'SOURCE tenant domain (e.g. source.onmicrosoft.com)' -AllowBlank
     $source.UserPrincipalName = Read-MDOTenantField $source.UserPrincipalName 'SOURCE tenant admin UPN (email)'
+    if (-not $SourceDomain)      { $source.Domain = Get-MDODomainFromUpn $source.UserPrincipalName }
 }
-$dest.Domain            = Read-MDOTenantField $dest.Domain            'DESTINATION tenant domain (e.g. destination.onmicrosoft.com)' -AllowBlank
 $dest.UserPrincipalName = Read-MDOTenantField $dest.UserPrincipalName 'DESTINATION tenant admin UPN (email)'
-
-if ([string]::IsNullOrWhiteSpace($dest.Domain)) {
-    Write-Host 'WARNING: no destination domain set - the wrong-tenant guard is DISABLED for this run.' -ForegroundColor Yellow
-}
+if (-not $DestinationDomain) { $dest.Domain = Get-MDODomainFromUpn $dest.UserPrincipalName }
 
 # ---- Start logging ---------------------------------------------------------------------------------
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
