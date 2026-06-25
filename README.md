@@ -85,7 +85,8 @@ inventory of every policy and rule to translate.
 | Safe Links | `SafeLinksPolicy` + `SafeLinksRule` |
 | Quarantine | `QuarantinePolicy` (+ global settings) |
 | Preset security policies | `EOPProtectionPolicyRule`, `ATPProtectionPolicyRule`, `ATPBuiltInProtectionRule` |
-| Tenant Allow/Block List | senders, URLs, file hashes, spoofed senders |
+| Mail flow rules | Exchange transport rules (`TransportRule`) - conditions, actions, exceptions, priority and enabled/disabled state |
+| Tenant Allow/Block List | senders, URLs (incl. AdvancedDelivery sub-type), file hashes, spoofed senders |
 
 ## Requirements
 

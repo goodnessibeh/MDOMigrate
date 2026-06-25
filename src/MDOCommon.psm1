@@ -214,6 +214,7 @@ function Get-MDOTypeRegistry {
           Quarantine - quarantine policy (custom recreated; built-ins skipped; global is Set-only)
           Singleton  - one fixed object, Set- only (no New- cmdlet)
           PresetRule - Standard/Strict preset security-policy rule
+          TransportRule - Exchange mail flow (transport) rule (standalone; no linked policy)
           TABL/TABLSpoof - Tenant Allow/Block List entries (dedicated handlers)
         Order controls import sequence (policies before rules, singletons last).
     #>
@@ -244,6 +245,9 @@ function Get-MDOTypeRegistry {
         [pscustomobject]@{ Type = 'HostedConnectionFilterPolicy';   Category = 'Singleton'; Identity = 'Default'; Order = 10 }
         [pscustomobject]@{ Type = 'AtpPolicyForO365';               Category = 'Singleton'; Identity = 'Default'; Order = 30 }
         [pscustomobject]@{ Type = 'ATPBuiltInProtectionRule';       Category = 'Singleton'; Identity = $null;     Order = 40 }
+
+        # --- Exchange mail flow (transport) rules ---
+        [pscustomobject]@{ Type = 'TransportRule';                  Category = 'TransportRule'; Order = 25 }
 
         # --- Preset security-policy rules ---
         [pscustomobject]@{ Type = 'EOPProtectionPolicyRule';        Category = 'PresetRule'; Order = 40 }

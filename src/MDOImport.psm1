@@ -523,6 +523,7 @@ function Import-MDOConfiguration {
             $itemResult = switch ($entry.Category) {
                 'Policy'     { Import-MDOPolicyObject     -Type $type -Object $obj -Execute:$Execute }
                 'Rule'       { Import-MDORuleObject       -Type $type -Object $obj -ExcludeParam $ruleExclude -LinkParam (Get-MDOProperty $entry 'LinkParam') -CreateMissingGroups $CreateMissingGroups -Execute:$Execute }
+                'TransportRule' { Import-MDORuleObject    -Type $type -Object $obj -ExcludeParam $ruleExclude -CreateMissingGroups $CreateMissingGroups -Execute:$Execute }
                 'Quarantine' { Import-MDOQuarantineObject -Object $obj -Execute:$Execute }
                 'Singleton'  { Import-MDOSingletonObject  -Entry $entry -Object $obj -Execute:$Execute }
                 'PresetRule' { Import-MDOPresetRuleObject -Type $type -Object $obj -ExcludeParam $ruleExclude -Execute:$Execute }
