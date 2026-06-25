@@ -1,0 +1,10 @@
+# Exported configuration and reports (may contain tenant-specific data)
+mdo-export/
+*.json
+*.xlsx
+*.csv
+
+# PowerShell / editor noise
+*.log
+.vscode/
+.idea/
