@@ -311,6 +311,9 @@ function Import-MDOTablObject {
     $action   = Get-MDOProperty $Object 'Action'
     $notes    = Get-MDOProperty $Object 'Notes'
     $expires  = Get-MDOProperty $Object 'ExpirationDate'
+    # ListSubType distinguishes normal tenant entries from AdvancedDelivery (phishing-simulation) URLs/
+    # senders; preserve it so those entries land in the right category instead of the default.
+    $subType  = Get-MDOProperty $Object 'ListSubType'
 
     if (-not $listType -or -not $value) {
         return [pscustomobject]@{ Success = $false; DryRun = (-not $Execute); Cmdlet = 'New-TenantAllowBlockListItems'; Description = 'incomplete TABL record'; Error = 'missing ListType/Value' }
@@ -318,10 +321,12 @@ function Import-MDOTablObject {
 
     $splat = @{ ListType = $listType; Entries = @($value) }
     if ($notes) { $splat['Notes'] = $notes }
+    if ($subType) { $splat['ListSubType'] = $subType }
     if ($action -eq 'Block') { $splat['Block'] = $true } else { $splat['Allow'] = $true }
     if ($expires) { $splat['ExpirationDate'] = [datetime]$expires } else { $splat['NoExpiration'] = $true }
 
-    return Invoke-MDOAction -Cmdlet 'New-TenantAllowBlockListItems' -Parameters $splat -Description "$listType $action '$value'" -Execute:$Execute
+    $label = if ($subType -and $subType -ne 'Tenant') { "$listType/$subType" } else { $listType }
+    return Invoke-MDOAction -Cmdlet 'New-TenantAllowBlockListItems' -Parameters $splat -Description "$label $action '$value'" -Execute:$Execute
 }
 
 function Import-MDOTablSpoofObject {
