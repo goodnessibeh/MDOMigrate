@@ -517,6 +517,22 @@ function Import-MDOConfiguration {
         if ($objects.Count -eq 0) { continue }
         Write-Host "`n--- $type ($($objects.Count)) ---" -ForegroundColor Cyan
 
+        # Pre-flight: Exchange Online only exposes cmdlets the signed-in admin has an RBAC role for, and
+        # the set is fixed at connection time. If the write cmdlet for this type isn't present, skip the
+        # whole type cleanly (don't fail every object or abort the run).
+        $writeCmdlet = switch ($entry.Category) {
+            'Quarantine' { 'New-QuarantinePolicy' }
+            'Singleton'  { "Set-$type" }
+            'TABL'       { 'New-TenantAllowBlockListItems' }
+            'TABLSpoof'  { 'New-TenantAllowBlockListSpoofItems' }
+            default      { "New-$type" }
+        }
+        if (-not (Get-Command $writeCmdlet -ErrorAction SilentlyContinue)) {
+            Write-Host "  [SKIP]   '$writeCmdlet' is not available in this session - skipping $type." -ForegroundColor Yellow
+            Write-Host "           The signed-in admin can't manage $type here. If you just assigned the RBAC role (e.g. 'Transport Rules' for mail flow rules), it can take time to take effect - reconnect (the cmdlet set is fixed at sign-in) once it has, then re-run with -IncludeType $type." -ForegroundColor DarkGray
+            continue
+        }
+
         $index = 0
         foreach ($obj in $objects) {
             $index++

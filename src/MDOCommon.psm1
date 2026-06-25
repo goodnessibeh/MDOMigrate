@@ -325,6 +325,31 @@ function Connect-MDOTenant {
     }
 }
 
+function ConvertTo-MDOScalarValue {
+    <#
+        Flattens a complex list element back to the scalar string the target cmdlet expects. Sender lists
+        (AllowedSenders/BlockedSenders) deserialise from JSON as objects like
+        { Group, Sender = { Address } } and domain lists as { Group, Domain, MatchSubDomains }; the
+        New-/Set- cmdlets want a plain address/domain string. Strings, numbers and booleans pass through;
+        an object with no recognised address/domain field is returned unchanged.
+    #>
+    [CmdletBinding()]
+    param($Item)
+    if ($null -eq $Item -or $Item -is [string] -or $Item -is [System.ValueType]) { return $Item }
+    $props = $Item.PSObject.Properties
+    # A sender object is { Group, Sender = { Address } }; a domain object is { Group, Domain, ... }.
+    # Once we recognise the shape, return its (possibly blank) value so the caller's filter can drop a
+    # blank entry - returning the whole object instead would slip a blank past that filter.
+    if ($props['Sender'] -and $props['Sender'].Value) {
+        $address = $props['Sender'].Value.PSObject.Properties['Address']
+        if ($address) { return [string]$address.Value }
+    }
+    foreach ($name in 'Address', 'SmtpAddress', 'Domain') {
+        if ($props[$name]) { return [string]$props[$name].Value }
+    }
+    return $Item
+}
+
 function ConvertTo-MDOSplat {
     <#
         Builds a parameter hashtable for $TargetCmdlet from $InputObject, including only properties
@@ -358,9 +383,11 @@ function ConvertTo-MDOSplat {
         if (($value -is [string]) -and [string]::IsNullOrWhiteSpace($value)) { continue }
 
         if (($value -is [System.Collections.IEnumerable]) -and ($value -isnot [string])) {
-            # Drop null / blank elements: an empty entry in a sender/domain list is rejected by the
-            # target cmdlet ("Invalid sender address specified: ''" / "value '' is already present").
-            $items = @($value | Where-Object { $null -ne $_ -and -not (($_ -is [string]) -and [string]::IsNullOrWhiteSpace($_)) })
+            # Flatten complex elements (sender/domain objects) to their scalar string, then drop null /
+            # blank entries - a blank element in a sender/domain list is rejected by the target cmdlet
+            # ("Invalid sender address specified: ''" / "value '' is already present in the collection").
+            $items = @($value | ForEach-Object { ConvertTo-MDOScalarValue $_ } |
+                Where-Object { $null -ne $_ -and -not (($_ -is [string]) -and [string]::IsNullOrWhiteSpace($_)) })
             if ($items.Count -eq 0) { continue }
             $value = $items
         }
